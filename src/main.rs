@@ -5,20 +5,43 @@ use egui_plot::{Line, Plot, PlotPoints};
 
 struct HolonApp {
     is_active: bool,
+    state: AppState,
+}
+
+#[derive(Debug, Default)]
+enum AppState {
+    #[default]
+    Default,
+    GhostLine,
 }
 
 impl HolonApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Initialize your Skyline state here in the future
-        Self { is_active: false }
+        Self {
+            is_active: false,
+            state: AppState::Default,
+        }
     }
 }
 
 impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        ui.ctx().set_debug_on_hover(true);
+        if ui.input(|i| i.key_pressed(egui::Key::O)) {
+            self.state = match self.state {
+                AppState::Default => AppState::GhostLine,
+                AppState::GhostLine => AppState::Default,
+            };
+        }
 
-        // 1. Reserve the top section for your controls
+        egui::Panel::right("order_book_panel")
+            .resizable(true) // User can drag the width
+            .show_inside(ui, |side_ui| {
+                side_ui.heading("Order Book");
+                side_ui.label("Waiting for orders...");
+                side_ui.take_available_width();
+            });
+
         egui::Panel::top("top_control_bar").show_inside(ui, |top_ui| {
             top_ui.horizontal(|ui| {
                 ui.heading("Holon Terminal");
@@ -30,14 +53,6 @@ impl eframe::App for HolonApp {
                 ui.checkbox(&mut self.is_active, "Snap to grid");
             });
         });
-
-        // 2. You could also add a side panel for a ledger/history!
-        egui::Panel::right("order_book_panel")
-            .resizable(true) // User can drag the width
-            .show_inside(ui, |side_ui| {
-                side_ui.heading("Order Book");
-                side_ui.label("Waiting for orders...");
-            });
 
         egui::CentralPanel::default().show_inside(ui, |panel_ui| {
             panel_ui.heading("HolonUI - Skyline Visualizer");
@@ -59,17 +74,19 @@ impl eframe::App for HolonApp {
 
                 let start_point = [2.0, 2.0];
 
-                // 2. Capture the mouse position inside the plot
-                // This returns an Option<PlotPoint> containing the actual X/Y math coordinates
-                if let Some(mouse_pos) = plot_ui.pointer_coordinate() {
-                    // 3. Draw the ghost line from the start point to the mouse
-                    let ghost_points = vec![start_point, [mouse_pos.x, mouse_pos.y]];
+                match self.state {
+                    AppState::Default => {}
+                    AppState::GhostLine => {
+                        if let Some(mouse_pos) = plot_ui.pointer_coordinate() {
+                            let ghost_points = vec![start_point, [mouse_pos.x, mouse_pos.y]];
 
-                    let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
-                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150)) // Semi-transparent white
-                        .style(egui_plot::LineStyle::Dashed { length: 5.0 }); // Make it dashed!
+                            let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
+                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150)) // Semi-transparent white
+                                .style(egui_plot::LineStyle::Dashed { length: 5.0 }); // Make it dashed!
 
-                    plot_ui.line(ghost_line);
+                            plot_ui.line(ghost_line);
+                        }
+                    }
                 }
 
                 if plot_ui.response().clicked()
