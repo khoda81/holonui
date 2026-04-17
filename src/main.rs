@@ -14,14 +14,14 @@ impl HolonApp {
 
 impl eframe::App for HolonApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ctx, |ui| {
             ui.heading("HolonUI - Skyline Visualizer");
 
             let plot = Plot::new("skyline_plot")
                 .view_aspect(2.0)
                 .show_grid(true)
                 .legend(egui_plot::Legend::default());
-            
+
             plot.show(ui, |plot_ui| {
                 // Mock a boundary representing your exponential space intents
                 let points: PlotPoints = (0..100)
@@ -30,11 +30,15 @@ impl eframe::App for HolonApp {
                         [x, x.exp()] // y = e^x
                     })
                     .collect();
-                
-                let line = Line::new(points).name("Intent Frontier");
+
+                let line = Line::new("Intent Frontier", points);
                 plot_ui.line(line);
             });
         });
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        todo!()
     }
 }
 
@@ -46,7 +50,7 @@ fn main() -> eframe::Result<()> {
     {
         eframe::WebLogger::init(log::LevelFilter::Debug).ok();
         let web_options = eframe::WebOptions::default();
-        
+
         wasm_bindgen_futures::spawn_local(async {
             eframe::WebRunner::new()
                 .start(
@@ -69,7 +73,7 @@ fn main() -> eframe::Result<()> {
         eframe::run_native(
             "HolonUI",
             native_options,
-            Box::new(|cc| Box::new(HolonApp::new(cc))),
+            Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
         )
     }
 }
