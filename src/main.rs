@@ -31,6 +31,7 @@ impl eframe::App for HolonApp {
                     })
                     .collect();
 
+                // FIX: Line::new now takes the name as the first argument
                 let line = Line::new("Intent Frontier", points);
                 plot_ui.line(line);
             });
@@ -54,9 +55,10 @@ fn main() -> eframe::Result<()> {
         wasm_bindgen_futures::spawn_local(async {
             eframe::WebRunner::new()
                 .start(
-                    "the_canvas_id", // Must match index.html
+                    "the_canvas_id",
                     web_options,
-                    Box::new(|cc| Box::new(HolonApp::new(cc))),
+                    // FIX: Wrapped the return value in Ok()
+                    Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
                 )
                 .await
                 .expect("failed to start eframe");
@@ -73,6 +75,7 @@ fn main() -> eframe::Result<()> {
         eframe::run_native(
             "HolonUI",
             native_options,
+            // FIX: Wrapped the return value in Ok()
             Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
         )
     }
