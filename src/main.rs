@@ -3,22 +3,47 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 
-struct HolonApp;
+struct HolonApp {
+    is_active: bool,
+}
 
 impl HolonApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Initialize your Skyline state here in the future
-        Self {}
+        Self { is_active: false }
     }
 }
 
 impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        ui.ctx().set_debug_on_hover(true);
+
+        // 1. Reserve the top section for your controls
+        egui::Panel::top("top_control_bar").show_inside(ui, |top_ui| {
+            top_ui.horizontal(|ui| {
+                ui.heading("Holon Terminal");
+                ui.separator(); // Adds a little vertical line
+
+                if ui.button("Place Order").clicked() {
+                    // self.place_order();
+                }
+                ui.checkbox(&mut self.is_active, "Snap to grid");
+            });
+        });
+
+        // 2. You could also add a side panel for a ledger/history!
+        egui::Panel::right("order_book_panel")
+            .resizable(true) // User can drag the width
+            .show_inside(ui, |side_ui| {
+                side_ui.heading("Order Book");
+                side_ui.label("Waiting for orders...");
+            });
+
         egui::CentralPanel::default().show_inside(ui, |panel_ui| {
             panel_ui.heading("HolonUI - Skyline Visualizer");
 
             let plot = Plot::new("skyline_plot")
-                .view_aspect(2.0)
+                // .view_aspect(2.0)
                 .show_grid(true)
                 .legend(egui_plot::Legend::default());
 
