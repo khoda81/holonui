@@ -23,16 +23,37 @@ impl eframe::App for HolonApp {
                 .legend(egui_plot::Legend::default());
 
             plot.show(panel_ui, |plot_ui| {
-                // Mock a boundary representing your exponential space intents
+                // 1. Draw your fixed stuff (the frontier boundary)
                 let points: PlotPoints = (0..100)
                     .map(|i| {
                         let x = i as f64 * 0.05;
                         [x, x.exp()]
                     })
                     .collect();
+                plot_ui.line(Line::new("Intent Frontier", points));
 
-                let line = Line::new("Intent Frontier", points);
-                plot_ui.line(line);
+                let start_point = [2.0, 2.0];
+
+                // 2. Capture the mouse position inside the plot
+                // This returns an Option<PlotPoint> containing the actual X/Y math coordinates
+                if let Some(mouse_pos) = plot_ui.pointer_coordinate() {
+                    // 3. Draw the ghost line from the start point to the mouse
+                    let ghost_points = vec![start_point, [mouse_pos.x, mouse_pos.y]];
+
+                    let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
+                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150)) // Semi-transparent white
+                        .style(egui_plot::LineStyle::Dashed { length: 5.0 }); // Make it dashed!
+
+                    plot_ui.line(ghost_line);
+                }
+
+                if plot_ui.response().clicked()
+                    && let Some(click_pos) = plot_ui.pointer_coordinate()
+                {
+                    println!("Clicked plot at X: {}, Y: {}", click_pos.x, click_pos.y);
+                    // Here you would save `click_pos` to your HolonApp struct's state
+                    // to make the line permanent!
+                }
             });
         });
     }
