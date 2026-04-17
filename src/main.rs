@@ -13,33 +13,28 @@ impl HolonApp {
 }
 
 impl eframe::App for HolonApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show_inside(ctx, |ui| {
-            ui.heading("HolonUI - Skyline Visualizer");
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show_inside(ui, |panel_ui| {
+            panel_ui.heading("HolonUI - Skyline Visualizer");
 
             let plot = Plot::new("skyline_plot")
                 .view_aspect(2.0)
                 .show_grid(true)
                 .legend(egui_plot::Legend::default());
 
-            plot.show(ui, |plot_ui| {
+            plot.show(panel_ui, |plot_ui| {
                 // Mock a boundary representing your exponential space intents
                 let points: PlotPoints = (0..100)
                     .map(|i| {
                         let x = i as f64 * 0.05;
-                        [x, x.exp()] // y = e^x
+                        [x, x.exp()]
                     })
                     .collect();
 
-                // FIX: Line::new now takes the name as the first argument
                 let line = Line::new("Intent Frontier", points);
                 plot_ui.line(line);
             });
         });
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        todo!()
     }
 }
 
