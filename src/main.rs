@@ -3,8 +3,11 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 
+type Allocation = [f64; 2];
+
 struct HolonApp {
     is_active: bool,
+    trajectory: Vec<Allocation>,
     state: AppState,
 }
 
@@ -21,6 +24,7 @@ impl HolonApp {
         Self {
             is_active: false,
             state: AppState::Default,
+            trajectory: vec![[1.0, 2.0], [2.0, 1.0], [2.0, 2.0]],
         }
     }
 }
@@ -60,39 +64,31 @@ impl eframe::App for HolonApp {
             let plot = Plot::new("skyline_plot")
                 // .view_aspect(2.0)
                 .show_grid(true)
-                .legend(egui_plot::Legend::default());
+                .legend(egui_plot::Legend::default())
+                .include_x(0.0)
+                .include_y(0.0);
 
             plot.show(panel_ui, |plot_ui| {
-                // 1. Draw your fixed stuff (the frontier boundary)
-                let points: PlotPoints = (0..100)
-                    .map(|i| {
-                        let x = i as f64 * 0.05;
-                        [x, x.exp()]
-                    })
-                    .collect();
-                plot_ui.line(Line::new("Intent Frontier", points));
+                plot_ui.line(Line::new("Intent Frontier", self.trajectory.clone()));
 
                 let start_point = [2.0, 2.0];
 
-                match self.state {
-                    AppState::Default => {}
-                    AppState::GhostLine => {
-                        if let Some(mouse_pos) = plot_ui.pointer_coordinate() {
-                            let ghost_points = vec![start_point, [mouse_pos.x, mouse_pos.y]];
+                if let AppState::GhostLine = self.state
+                    && let Some(mouse_pos) = plot_ui.pointer_coordinate()
+                {
+                    let ghost_points = vec![start_point, [mouse_pos.x, mouse_pos.y]];
 
-                            let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150)) // Semi-transparent white
-                                .style(egui_plot::LineStyle::Dashed { length: 5.0 }); // Make it dashed!
+                    let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
+                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150))
+                        .style(egui_plot::LineStyle::Dashed { length: 5.0 });
 
-                            plot_ui.line(ghost_line);
-                        }
-                    }
+                    plot_ui.line(ghost_line);
                 }
 
                 if plot_ui.response().clicked()
                     && let Some(click_pos) = plot_ui.pointer_coordinate()
                 {
-                    println!("Clicked plot at X: {}, Y: {}", click_pos.x, click_pos.y);
+                    log::info!("Clicked plot at X: {}, Y: {}", click_pos.x, click_pos.y);
                     // Here you would save `click_pos` to your HolonApp struct's state
                     // to make the line permanent!
                 }
