@@ -36,18 +36,15 @@ pub struct HolonApp {
     trajectory: Vec<Trade>,
     anchor: Allocation,
     mode: AppMode,
-    api_receiver: Receiver<BackendEvent>, // Receives data from the async task
+    api_receiver: Receiver<BackendEvent>,
+    /// Tracks the time unit for the color decay weight
+    time_unit_sec: f64,
 }
 
 fn get_color_rgba(t: f32) -> egui::Color32 {
     let start_color = Rgba::from(egui::Color32::from_rgb(68, 1, 84)); // Dark purple
     let end_color = Rgba::from(egui::Color32::from_rgb(253, 231, 37)); // Yellow
 
-    // let mixed_rgba = Rgba::from_rgb(
-    //     egui::lerp(start_color.l..=end_color.l, t),
-    //     egui::lerp(start_color.a..=end_color.a, t),
-    //     egui::lerp(start_color.b..=end_color.b, t),
-    // );
     let mixed_rgba = egui::lerp(start_color..=end_color, t);
 
     egui::Color32::from(mixed_rgba)
@@ -58,10 +55,13 @@ impl HolonApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx_clone = cc.egui_ctx.clone();
 
-        spawn_local(async move {
-            let network_backend = NetworkBackend::new(tx, ctx_clone);
+        let network_backend = NetworkBackend::new(tx, ctx_clone);
 
-            network_backend.fetch_nobitex_data().await
+        spawn_local(async move {
+            futures::join!(
+                network_backend.fetch_balances(),
+                network_backend.fetch_trajectory()
+            );
         });
 
         Self {
@@ -69,11 +69,11 @@ impl HolonApp {
             trajectory: vec![],
             anchor: [0.0, 0.0],
             api_receiver: rx,
+            time_unit_sec: chrono::Duration::days(2).as_seconds_f64(),
         }
     }
 
     pub fn update(&mut self) {
-        // Process all pending messages from the background
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
                 BackendEvent::FetchedBalances { anchor } => self.anchor = anchor,
@@ -98,10 +98,19 @@ impl HolonApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("HolonUI - Skyline Visualizer");
 
+            // Add the exponential slider for adjusting the time unit
+            ui.horizontal(|ui| {
+                ui.label("Time Unit (Seconds):");
+                ui.add(
+                    egui::Slider::new(&mut self.time_unit_sec, 1.0..=31_536_000.0) // 1 min to 1 year
+                        .logarithmic(true)
+                        .text("sec"),
+                );
+            });
+
             let scale_plot = !self.mode.is_ghost_line();
 
             let plot = Plot::new("skyline_plot")
-                // .view_aspect(2.0)
                 .show_grid(true)
                 .legend(egui_plot::Legend::default())
                 .include_x(0.0)
@@ -112,28 +121,31 @@ impl HolonApp {
             plot.show(ui, |ui| self.render_plot_contents(ui));
         });
     }
+
     fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
-        // 1. Calculate absolute trajectory relative to the anchor
         let mut absolute_points = vec![self.anchor];
         let mut current_point = self.anchor;
 
-        // Get the current time
         let now = Utc::now();
 
-        const TIME_UNIT: chrono::TimeDelta = chrono::Duration::days(3);
-
-        // Draw the trajectory as multiple segments to support different colors
+        // Convert the time unit into milliseconds for calculation
         for Trade { delta, timestamp } in self.trajectory.iter() {
-            let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
-
             let elapsed = now - *timestamp;
-            let delta_t = elapsed.num_milliseconds() as f64 / TIME_UNIT.num_milliseconds() as f64;
+            let mut elapsed_s = elapsed.as_seconds_f64();
 
+            // Ensure dt is never negative
+            if elapsed_s < 0.0 {
+                log::warn!("Unexpected negative elapsed time for a trade");
+                elapsed_s = 0.0;
+            }
+
+            // Calculate ratio and the exponential decay weight
+            let delta_t = elapsed_s / self.time_unit_sec;
             let weight = (-delta_t as f32).exp(); // e^(-t), a value between 0.0 and 1.0
 
             let color = get_color_rgba(weight);
 
-            // Note: Line::new only takes PlotPoints, you set the name with .name()
+            let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
             let segment = Line::new(
                 "Intent Frontier Segment",
                 PlotPoints::new(vec![current_point, next_point]),
@@ -168,12 +180,16 @@ impl HolonApp {
             ui.line(ghost_line);
         }
 
-        // 5. Handle Click to add new point (stored as a relative delta)
         if ui.response().clicked()
             && let Some(PlotPoint { x, y }) = ui.pointer_coordinate()
         {
-            // Since trajectory stores relative changes, we calculate the delta
             let delta = [x - self.anchor[0], y - self.anchor[1]];
+
+            // We must now push a full Trade object
+            self.trajectory.push(Trade {
+                delta,
+                timestamp: Utc::now(),
+            });
 
             log::info!("Clicked plot at X: {x}, Y: {y} (Delta: {delta:?})");
             self.mode = AppMode::Default;
@@ -184,7 +200,6 @@ impl HolonApp {
 impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.update();
-
         self.handle_keyboard(ui);
         self.render_main_plot(ui);
     }

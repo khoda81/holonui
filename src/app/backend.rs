@@ -30,11 +30,7 @@ impl NetworkBackend {
         }
     }
 
-    pub async fn fetch_nobitex_data(&self) {
-        futures::join!(self.fetch_balances(), self.fetch_trajectory());
-    }
-
-    async fn fetch_trajectory(&self) {
+    pub async fn fetch_trajectory(&self) {
         let mut all_trades = Vec::new();
 
         for page in 1.. {
@@ -63,12 +59,7 @@ impl NetworkBackend {
         self.send_event(BackendEvent::FetchedTrades { trajectory });
     }
 
-    fn send_event(&self, event: BackendEvent) {
-        let _ = self.sender.send(event);
-        self.ctx.request_repaint()
-    }
-
-    async fn fetch_balances(&self) {
+    pub async fn fetch_balances(&self) {
         // Automatically fetches and parses into WalletsResponse
         let response: WalletsResponse = self
             .fetch_endpoint("https://apiv2.nobitex.ir/users/wallets/list")
@@ -111,5 +102,10 @@ impl NetworkBackend {
                 }
             }
         }
+    }
+
+    fn send_event(&self, event: BackendEvent) {
+        let _ = self.sender.send(event);
+        self.ctx.request_repaint()
     }
 }
