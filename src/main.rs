@@ -66,12 +66,12 @@ impl HolonApp {
 
     fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
         ui.line(Line::new("Intent Frontier", self.trajectory.clone()));
-        let start_point = self.trajectory.last().copied().unwrap_or([0.0, 0.0]);
         if let AppMode::Default = self.mode {
             return;
         }
 
         if let Some(mouse_pos) = ui.pointer_coordinate() {
+            let start_point = self.trajectory.last().copied().unwrap_or([0.0, 0.0]);
             let ghost_points = vec![start_point, [mouse_pos.x, mouse_pos.y]];
 
             let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
