@@ -65,8 +65,14 @@ impl HolonApp {
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
                 BackendEvent::SyncStarted => {}
-                BackendEvent::FetchedBalances { anchor } => self.anchor = anchor,
-                BackendEvent::FetchedTrades { trajectory } => self.trajectory = trajectory,
+                BackendEvent::FetchedBalances { anchor } => {
+                    log::info!("Received anchor: {anchor:?}");
+                    self.anchor = anchor
+                }
+                BackendEvent::FetchedTrades { trajectory } => {
+                    log::info!("Received trades: {trajectory:?}");
+                    self.trajectory = trajectory
+                }
                 // TODO:
                 BackendEvent::SyncFailed(err) => _ = err,
             }
@@ -100,16 +106,31 @@ impl HolonApp {
             plot.show(ui, |ui| self.render_plot_contents(ui));
         });
     }
-
     fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
-        ui.line(Line::new("Intent Frontier", self.trajectory.clone()));
+        // 1. Calculate absolute trajectory relative to the anchor
+        let mut absolute_points = vec![self.anchor];
+        let mut current_point = self.anchor;
+
+        for delta in &self.trajectory {
+            current_point[0] += delta[0];
+            current_point[1] += delta[1];
+            absolute_points.push(current_point);
+        }
+
+        ui.line(Line::new("Intent Frontier", absolute_points.clone()));
+
+        ui.points(
+            egui_plot::Points::new("Anchor (Current Balance)", vec![self.anchor])
+                .radius(5.0)
+                .color(egui::Color32::RED),
+        );
+
         if let AppMode::Default = self.mode {
             return;
         }
 
         if let Some(mouse_pos) = ui.pointer_coordinate() {
-            let start_point = self.trajectory.last().copied().unwrap_or([0.0, 0.0]);
-            let ghost_points = vec![start_point, [mouse_pos.x, mouse_pos.y]];
+            let ghost_points = vec![self.anchor, [mouse_pos.x, mouse_pos.y]];
 
             let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
                 .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150))
@@ -118,11 +139,15 @@ impl HolonApp {
             ui.line(ghost_line);
         }
 
+        // 5. Handle Click to add new point (stored as a relative delta)
         if ui.response().clicked()
             && let Some(PlotPoint { x, y }) = ui.pointer_coordinate()
         {
-            self.trajectory.push([x, y]);
-            log::info!("Clicked plot at X: {x}, Y: {y}");
+            // Since trajectory stores relative changes, we calculate the delta
+            let delta = [x - self.anchor[0], y - self.anchor[1]];
+            self.trajectory.push(delta);
+
+            log::info!("Clicked plot at X: {x}, Y: {y} (Delta: {delta:?})");
             self.mode = AppMode::Default;
         }
     }
