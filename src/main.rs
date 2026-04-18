@@ -1,14 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use dotenvy::dotenv;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
+use std::env;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 type Allocation = [f64; 2];
-
-struct HolonApp {
-    trajectory: Vec<Allocation>,
-    mode: AppMode,
-}
 
 #[derive(Debug, Default)]
 enum AppMode {
@@ -20,19 +18,25 @@ enum AppMode {
 impl AppMode {
     /// Returns `true` if the app state is [`GhostLine`].
     ///
-    /// [`GhostLine`]: AppState::GhostLine
+    /// [`GhostLine`]: AppMode::GhostLine
     #[must_use]
     fn is_ghost_line(&self) -> bool {
         matches!(self, Self::GhostLine)
     }
 }
 
+struct HolonApp {
+    trajectory: Vec<Allocation>,
+    mode: AppMode,
+    api_receiver: Receiver<Allocation>, // Receives data from the async task
+}
+
 impl HolonApp {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // Initialize your Skyline state here in the future
+    fn new(_cc: &eframe::CreationContext<'_>, rx: Receiver<Allocation>) -> Self {
         Self {
             mode: AppMode::Default,
-            trajectory: vec![[1.0, 2.0], [2.0, 1.0], [2.0, 2.0]],
+            trajectory: vec![[0.0, 0.0]], // Start at origin
+            api_receiver: rx,
         }
     }
 
@@ -93,16 +97,46 @@ impl HolonApp {
 
 impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 1. Drain the channel to update trajectory smoothly without blocking UI
+        while let Ok(new_allocation) = self.api_receiver.try_recv() {
+            self.trajectory.push(new_allocation);
+            log::info!("Added new API allocation: {:?}", new_allocation);
+        }
+
+        // 2. Render UI
         self.handle_keyboard(ui);
         self.render_main_plot(ui);
     }
 }
 
+// The Async API Call
+async fn fetch_nobitex_data(tx: Sender<Allocation>) {
+    let api_key = env::var("NOBITEX_API_KEY").expect("NOBITEX_API_KEY must be set");
+    let client = reqwest::Client::new();
+
+    // Example API Call using the Nobitex USDT endpoint
+    match client
+        .get("https://apiv2.nobitex.ir/users/transactions-history?currency=usdt")
+        .header("Authorization", format!("Token {}", api_key))
+        .send()
+        .await
+    {
+        Ok(response) => {
+            if let Ok(json) = response.json::<serde_json::Value>().await {
+                // TODO: Parse the `json` to extract your $x$ and $y$ values.
+                // Assuming you extract a transaction amount and map it:
+                let example_parsed_allocation: Allocation = [100.0, 50000.0];
+
+                // Send the calculated allocation back to the UI thread
+                let _ = tx.send(example_parsed_allocation);
+            }
+        }
+        Err(e) => log::error!("Failed to fetch API: {}", e),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 fn main() -> eframe::Result<()> {
-    // ----------------------------------------------------
-    // WebAssembly Initialization
-    // ----------------------------------------------------
-    #[cfg(target_arch = "wasm32")]
     {
         use web_sys::wasm_bindgen::JsCast;
 
@@ -132,18 +166,32 @@ fn main() -> eframe::Result<()> {
         });
         Ok(())
     }
+}
 
-    // ----------------------------------------------------
-    // Native Desktop Initialization (for fast local dev)
-    // ----------------------------------------------------
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let native_options = eframe::NativeOptions::default();
-        eframe::run_native(
-            "HolonUI",
-            native_options,
-            // FIX: Wrapped the return value in Ok()
-            Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
-        )
-    }
+#[cfg(not(target_arch = "wasm32"))]
+fn main() -> Result<(), eframe::Error> {
+    // 1. Load Environment Variables & Setup Logging
+    dotenv().ok();
+    env_logger::init(); // Requires `RUST_LOG=info` environment variable
+
+    log::info!("Starting HolonApp...");
+
+    // 2. Setup communication channel between Tokio and egui
+    let (tx, rx) = mpsc::channel::<Allocation>();
+
+    // 3. Spawn Tokio runtime in a background thread
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            fetch_nobitex_data(tx).await;
+        });
+    });
+
+    // 4. Start the native UI
+    let native_options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "Holon eFrame App",
+        native_options,
+        Box::new(|cc| Ok(Box::new(HolonApp::new(cc, rx)))),
+    )
 }
