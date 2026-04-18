@@ -112,7 +112,6 @@ impl HolonApp {
             plot.show(ui, |ui| self.render_plot_contents(ui));
         });
     }
-
     fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
         // 1. Calculate absolute trajectory relative to the anchor
         let mut absolute_points = vec![self.anchor];
@@ -121,18 +120,24 @@ impl HolonApp {
         // Get the current time
         let now = Utc::now();
 
-        const TIME_UNIT: chrono::TimeDelta = chrono::Duration::minutes(1);
+        const TIME_UNIT: chrono::TimeDelta = chrono::Duration::days(3);
 
         // Draw the trajectory as multiple segments to support different colors
-        for &Trade { delta, timestamp } in self.trajectory.iter() {
+        for Trade { delta, timestamp } in self.trajectory.iter() {
             let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
 
-            let time_delta = timestamp - now;
-            let delta_t = (time_delta) / TIME_UNIT;
-            let weight = delta_t.exp(); // value between 0 and 1
+            // Calculate how many minutes ago this trade happened
+            let elapsed = now - *timestamp;
+
+            // Convert both to f64 seconds and divide
+            let delta_t = elapsed.num_milliseconds() as f64 / TIME_UNIT.num_milliseconds() as f64;
+
+            // Weight decays exponentially the older the trade is
+            let weight = (-delta_t as f32).exp(); // e^(-t), a value between 0.0 and 1.0
 
             let color = get_color_rgba(weight);
 
+            // Note: Line::new only takes PlotPoints, you set the name with .name()
             let segment = Line::new(
                 "Intent Frontier Segment",
                 PlotPoints::new(vec![current_point, next_point]),
@@ -145,10 +150,12 @@ impl HolonApp {
             absolute_points.push(current_point);
         }
 
+        let anchor_color = get_color_rgba(1.0);
+
         ui.points(
             egui_plot::Points::new("Anchor (Current Balance)", vec![self.anchor])
                 .radius(5.0)
-                .color(egui::Color32::RED),
+                .color(anchor_color),
         );
 
         if let AppMode::Default = self.mode {
@@ -171,7 +178,6 @@ impl HolonApp {
         {
             // Since trajectory stores relative changes, we calculate the delta
             let delta = [x - self.anchor[0], y - self.anchor[1]];
-            self.trajectory.push(delta);
 
             log::info!("Clicked plot at X: {x}, Y: {y} (Delta: {delta:?})");
             self.mode = AppMode::Default;

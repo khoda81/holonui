@@ -1,7 +1,7 @@
 mod models;
 
 use crate::{
-    app::backend::models::{TradeType, TradesResponse, WalletsResponse},
+    app::backend::models::{TradesResponse, WalletsResponse},
     utils::sleep_async,
 };
 use serde::de::DeserializeOwned;
