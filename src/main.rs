@@ -115,24 +115,23 @@ async fn fetch_nobitex_data(tx: Sender<Allocation>) {
     let client = reqwest::Client::new();
 
     // Example API Call using the Nobitex USDT endpoint
-    match client
-        .get("https://apiv2.nobitex.ir/users/transactions-history?currency=usdt")
+    let url =
+        reqwest::Url::parse("https://apiv2.nobitex.ir/users/transactions-history?currency=usdt")
+            .expect("failed to parse url");
+
+    let json: serde_json::Value = client
+        .get(url)
         .header("Authorization", format!("Token {}", api_key))
         .send()
         .await
-    {
-        Ok(response) => {
-            if let Ok(json) = response.json::<serde_json::Value>().await {
-                // TODO: Parse the `json` to extract your $x$ and $y$ values.
-                // Assuming you extract a transaction amount and map it:
-                let example_parsed_allocation: Allocation = [100.0, 50000.0];
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
 
-                // Send the calculated allocation back to the UI thread
-                let _ = tx.send(example_parsed_allocation);
-            }
-        }
-        Err(e) => log::error!("Failed to fetch API: {}", e),
-    }
+    log::info!("{json:?}");
+
+    let _ = tx.send([100.0, 50000.0]);
 }
 
 #[cfg(target_arch = "wasm32")]
