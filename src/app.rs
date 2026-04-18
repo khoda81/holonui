@@ -126,13 +126,9 @@ impl HolonApp {
         for Trade { delta, timestamp } in self.trajectory.iter() {
             let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
 
-            // Calculate how many minutes ago this trade happened
             let elapsed = now - *timestamp;
-
-            // Convert both to f64 seconds and divide
             let delta_t = elapsed.num_milliseconds() as f64 / TIME_UNIT.num_milliseconds() as f64;
 
-            // Weight decays exponentially the older the trade is
             let weight = (-delta_t as f32).exp(); // e^(-t), a value between 0.0 and 1.0
 
             let color = get_color_rgba(weight);
