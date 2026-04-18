@@ -97,7 +97,6 @@ impl eframe::App for HolonApp {
         // 1. Drain the channel to update trajectory smoothly without blocking UI
         while let Ok(new_allocation) = self.api_receiver.try_recv() {
             self.trajectory.push(new_allocation);
-            log::info!("Added new API allocation: {:?}", new_allocation);
         }
 
         // 2. Render UI
@@ -126,7 +125,34 @@ pub async fn fetch_nobitex_data(tx: Sender<Allocation>) {
         .await
         .unwrap();
 
-    log::info!("{json:?}");
+    log::info!("{json}");
 
-    let _ = tx.send([100.0, 50000.0]);
+    // 1. Extract the "transactions" array
+    if let Some(transactions) = json.get("transactions").and_then(|t| t.as_array()) {
+        let mut trade_index = 0.0;
+
+        // 2. Iterate in reverse (`.rev()`) to go chronologically (oldest to newest)
+        for tx_data in transactions.iter().rev() {
+            // Extract and parse the balance string into an f64
+            let balance: f64 = tx_data
+                .get("balance")
+                .and_then(|b| b.as_str())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
+
+            // Optional: Extract the trade amount if you need it
+            // let amount: f64 = tx_data.get("amount").and_then(|a| a.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+
+            // 3. Define your X and Y.
+            // Here we use X = trade number, Y = USDT Balance
+            let x = trade_index;
+            let y = balance;
+
+            // Send the parsed point to the UI
+            let _ = tx.send([x, y]);
+            trade_index += 1.0;
+        }
+    } else {
+        log::error!("Failed to find 'transactions' array in API response");
+    }
 }
