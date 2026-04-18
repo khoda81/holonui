@@ -1,5 +1,6 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use std::env;
 use std::sync::mpsc::{Receiver, Sender};
@@ -164,6 +165,39 @@ impl eframe::App for HolonApp {
     }
 }
 
+// Helper function to deserialize stringified numbers into f64
+fn f64_from_str<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse().map_err(serde::de::Error::custom)
+}
+
+#[derive(Deserialize, Debug)]
+struct TradesResponse {
+    trades: Vec<Trade>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Trade {
+    #[serde(rename = "type")]
+    trade_type: TradeType,
+    #[serde(deserialize_with = "f64_from_str")]
+    amount: f64,
+    #[serde(deserialize_with = "f64_from_str")]
+    total: f64,
+    #[serde(deserialize_with = "f64_from_str")]
+    fee: f64,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum TradeType {
+    Buy,
+    Sell,
+}
+
 struct NetworkBackend {
     sender: Sender<BackendEvent>,
     ctx: egui::Context,
@@ -194,50 +228,31 @@ impl NetworkBackend {
 
         log::trace!("{trades_json}");
 
-        // 3. Reconstruct Trajectory Backwards
-        let mut trajectory = vec![];
+        // Deserialize the raw JSON Value into our strictly-typed structs
+        let parsed_response: TradesResponse = match serde_json::from_value(trades_json) {
+            Ok(res) => res,
+            Err(err) => {
+                log::error!("Failed to parse trades data: {}", err);
 
-        if let Some(trades) = trades_json.get("trades").and_then(|t| t.as_array()) {
-            // Assuming trades are returned newest first. If they are oldest first,
-            // you'll need to .rev() the iterator here.
-            for trade in trades {
-                let t_type = trade.get("type").and_then(|t| t.as_str()).unwrap();
+                return;
+            }
+        };
 
-                let amount: f64 = trade
-                    .get("amount")
-                    .and_then(|a| a.as_str())
-                    .and_then(|s| s.parse().ok())
-                    .unwrap();
-
-                let total: f64 = trade
-                    .get("total")
-                    .and_then(|t| t.as_str())
-                    .and_then(|s| s.parse().ok())
-                    .unwrap();
-
-                let fee: f64 = trade
-                    .get("fee")
-                    .and_then(|f| f.as_str())
-                    .and_then(|s| s.parse().ok())
-                    .unwrap();
-
+        let trajectory: Vec<[f64; 2]> = parsed_response
+            .trades
+            .into_iter()
+            .map(|trade| {
                 // Undo the trade to find the balance BEFORE this trade happened
-                let trade_delta = if t_type == "buy" {
+                match trade.trade_type {
                     // You received $(amount - fee)$ in USDT, and paid $total$ in RLS.
                     // To undo: Subtract the net USDT gained, add the RLS paid.
-                    [-(amount - fee), total]
-                } else if t_type == "sell" {
+                    TradeType::Buy => [-(trade.amount - trade.fee), trade.total],
                     // You paid $amount$ in USDT, and received $(total - fee)$ in RLS.
                     // To undo: Add the USDT paid, subtract the net RLS gained.
-                    [amount, -(total - fee)]
-                } else {
-                    log::warn!("Unexpected trade type `{t_type}`");
-                    break;
-                };
-
-                trajectory.push(trade_delta);
-            }
-        }
+                    TradeType::Sell => [trade.amount, -(trade.total - trade.fee)],
+                }
+            })
+            .collect();
 
         let _ = self.sender.send(BackendEvent::FetchedTrades { trajectory });
         self.ctx.request_repaint();
