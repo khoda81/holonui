@@ -1,9 +1,12 @@
 mod models;
 
 use super::Allocation;
-use crate::app::backend::models::{TradeType, TradesResponse, WalletsResponse};
+use crate::{
+    app::backend::models::{TradeType, TradesResponse, WalletsResponse},
+    utils::sleep_async,
+};
 use serde::de::DeserializeOwned;
-use std::sync::mpsc::Sender;
+use std::{sync::mpsc::Sender, time::Duration};
 
 pub enum BackendEvent {
     FetchedTrades { trajectory: Vec<Allocation> },
@@ -32,40 +35,44 @@ impl NetworkBackend {
         futures::join!(self.fetch_balances(), self.fetch_trajectory());
     }
 
-    pub(crate) async fn fetch_trajectory(&self) {
-        let trades_response: TradesResponse = self
-            .fetch_endpoint(
-                "https://apiv2.nobitex.ir/market/trades/list?srcCurrency=usdt&dstCurrency=rls",
-            )
-            .await;
+    async fn fetch_trajectory(&self) {
+        let mut all_trades = Vec::new();
 
-        log::trace!("{trades_response:?}");
+        for page in 1.. {
+            // Fetch 100 items per page (the maximum allowed)
+            let url = format!(
+                "https://apiv2.nobitex.ir/market/trades/list?srcCurrency=usdt&dstCurrency=rls&page={page}&pageSize=100",
+            );
 
-        let trajectory = trades_response
-            .trades
+            let trades_response: TradesResponse = self.fetch_endpoint(&url).await;
+            all_trades.extend(trades_response.trades);
+
+            if !trades_response.has_next {
+                log::trace!("Fetched {} trades across {} pages", all_trades.len(), page);
+                break;
+            }
+
+            // Optional: Be nice to their API and add a tiny delay between pages
+            sleep_async(Duration::from_millis(200)).await;
+        }
+
+        let trajectory = all_trades
             .into_iter()
-            .map(|trade| {
-                // Undo the trade to find the balance BEFORE this trade happened
-                match trade.trade_type {
-                    // You received $(amount - fee)$ in USDT, and paid $total$ in RLS.
-                    // To undo: Subtract the net USDT gained, add the RLS paid.
-                    TradeType::Buy => [-(trade.amount - trade.fee), trade.total],
-                    // You paid $amount$ in USDT, and received $(total - fee)$ in RLS.
-                    // To undo: Add the USDT paid, subtract the net RLS gained.
-                    TradeType::Sell => [trade.amount, -(trade.total - trade.fee)],
-                }
+            .map(|trade| match trade.trade_type {
+                TradeType::Buy => [-(trade.amount - trade.fee), trade.total],
+                TradeType::Sell => [trade.amount, -(trade.total - trade.fee)],
             })
             .collect();
 
         self.send_event(BackendEvent::FetchedTrades { trajectory });
     }
 
-    pub(crate) fn send_event(&self, event: BackendEvent) {
+    fn send_event(&self, event: BackendEvent) {
         let _ = self.sender.send(event);
         self.ctx.request_repaint()
     }
 
-    pub(crate) async fn fetch_balances(&self) {
+    async fn fetch_balances(&self) {
         // Automatically fetches and parses into WalletsResponse
         let response: WalletsResponse = self
             .fetch_endpoint("https://apiv2.nobitex.ir/users/wallets/list")
@@ -87,9 +94,8 @@ impl NetworkBackend {
         });
     }
 
-    pub(crate) async fn fetch_endpoint<T: DeserializeOwned>(&self, url: &str) -> T {
+    async fn fetch_endpoint<T: DeserializeOwned>(&self, url: &str) -> T {
         loop {
-            // Group the network request and JSON parsing into a single Result-returning async block
             let result = async {
                 self.client
                     .get(url)
@@ -102,7 +108,11 @@ impl NetworkBackend {
 
             match result.await {
                 Ok(parsed) => break parsed,
-                Err(err) => self.send_event(BackendEvent::RequestError(err)),
+                Err(err) => {
+                    self.send_event(BackendEvent::RequestError(err));
+                    // Add the delay before retrying!
+                    sleep_async(Duration::from_secs(3)).await;
+                }
             }
         }
     }

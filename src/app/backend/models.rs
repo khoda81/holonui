@@ -12,6 +12,8 @@ where
 #[derive(Deserialize, Debug)]
 pub struct TradesResponse {
     pub trades: Vec<Trade>,
+    #[serde(rename = "hasNext")]
+    pub has_next: bool,
 }
 
 #[derive(Deserialize, Debug)]

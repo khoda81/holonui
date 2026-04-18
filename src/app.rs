@@ -9,7 +9,7 @@ use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
 use std::sync::mpsc::Receiver;
 
 #[derive(Debug, Default)]
-pub(crate) enum AppMode {
+enum AppMode {
     #[default]
     Default,
     GhostLine,
@@ -20,7 +20,7 @@ impl AppMode {
     ///
     /// [`GhostLine`]: AppMode::GhostLine
     #[must_use]
-    pub(crate) fn is_ghost_line(&self) -> bool {
+    fn is_ghost_line(&self) -> bool {
         matches!(self, Self::GhostLine)
     }
 }
@@ -73,7 +73,7 @@ impl HolonApp {
         }
     }
 
-    pub(crate) fn handle_keyboard(&mut self, ui: &mut egui::Ui) {
+    fn handle_keyboard(&mut self, ui: &mut egui::Ui) {
         if ui.input(|i| i.key_pressed(egui::Key::O)) {
             self.mode = match self.mode {
                 AppMode::Default => AppMode::GhostLine,
@@ -82,7 +82,7 @@ impl HolonApp {
         }
     }
 
-    pub(crate) fn render_main_plot(&mut self, ui: &mut egui::Ui) {
+    fn render_main_plot(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("HolonUI - Skyline Visualizer");
 
@@ -100,7 +100,7 @@ impl HolonApp {
             plot.show(ui, |ui| self.render_plot_contents(ui));
         });
     }
-    pub(crate) fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
+    fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
         // 1. Calculate absolute trajectory relative to the anchor
         let mut absolute_points = vec![self.anchor];
         let mut current_point = self.anchor;
