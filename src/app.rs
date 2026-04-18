@@ -106,17 +106,17 @@ impl HolonApp {
                         .custom_formatter(|sec, _| format_humantime(sec)),
                 );
             });
+
             let scale_plot = !self.mode.is_ghost_line();
 
-            let plot = Plot::new("skyline_plot")
+            Plot::new("skyline_plot")
                 .show_grid(true)
                 .legend(egui_plot::Legend::default())
                 .include_x(0.0)
                 .include_y(0.0)
                 .allow_double_click_reset(scale_plot)
-                .auto_bounds(scale_plot);
-
-            plot.show(ui, |ui| self.render_plot_contents(ui));
+                .auto_bounds(scale_plot)
+                .show(ui, |ui| self.render_plot_contents(ui));
         });
     }
 
@@ -182,12 +182,6 @@ impl HolonApp {
             && let Some(PlotPoint { x, y }) = ui.pointer_coordinate()
         {
             let delta = [x - self.anchor[0], y - self.anchor[1]];
-
-            // We must now push a full Trade object
-            self.trajectory.push(Trade {
-                delta,
-                timestamp: Utc::now(),
-            });
 
             log::info!("Clicked plot at X: {x}, Y: {y} (Delta: {delta:?})");
             self.mode = AppMode::Default;
