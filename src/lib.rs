@@ -1,9 +1,10 @@
-use chrono::{DateTime, Utc};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
 use serde_json::Value;
 use std::env;
 use std::sync::mpsc::{Receiver, Sender};
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
 
 pub type Allocation = [f64; 2];
 
@@ -44,9 +45,9 @@ impl HolonApp {
         let ctx_clone = cc.egui_ctx.clone();
 
         spawn_local(async move {
-            NetworkBackend::new(tx, ctx_clone)
-                .fetch_nobitex_data()
-                .await
+            let network_backend = NetworkBackend::new(tx, ctx_clone);
+
+            network_backend.fetch_nobitex_data().await
         });
 
         Self {
@@ -154,46 +155,18 @@ impl NetworkBackend {
     }
 
     pub async fn fetch_nobitex_data(&self) {
-        // 1. Fetch Wallets and Trades concurrently using runtime-agnostic join!
-        let (wallets_json, trades_json) = futures::join!(
-            self.fetch_endpoint("https://apiv2.nobitex.ir/users/wallets/list"),
-            self.fetch_endpoint(
-                "https://apiv2.nobitex.ir/market/trades/list?srcCurrency=usdt&dstCurrency=rls"
+        futures::join!(self.fetch_balances(), self.fetch_trajectory());
+    }
+
+    async fn fetch_trajectory(&self) {
+        let trades_json = self
+            .fetch_endpoint(
+                "https://apiv2.nobitex.ir/market/trades/list?srcCurrency=usdt&dstCurrency=rls",
             )
-        );
-
-        // 2. Extract Anchor (Current Balances)
-        let mut current_usdt = 0.0;
-        let mut current_rls = 0.0;
-
-        if let Some(wallets) = wallets_json.get("wallets").and_then(|w| w.as_array()) {
-            for wallet in wallets {
-                let currency = wallet
-                    .get("currency")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("");
-                let balance_str = wallet
-                    .get("balance")
-                    .and_then(|b| b.as_str())
-                    .unwrap_or("0");
-                let balance: f64 = balance_str.parse().unwrap_or(0.0);
-
-                if currency == "usdt" {
-                    current_usdt = balance;
-                } else if currency == "rls" {
-                    current_rls = balance;
-                }
-            }
-        }
-
-        let anchor = [current_usdt, current_rls];
-        let _ = self.sender.send(BackendEvent::FetchedBalances { anchor });
-        self.ctx.request_repaint(); // Wake UI to show anchor immediately
+            .await;
 
         // 3. Reconstruct Trajectory Backwards
-        let mut trajectory = vec![anchor];
-        let mut sim_usdt = current_usdt;
-        let mut sim_rls = current_rls;
+        let mut trajectory = vec![];
 
         if let Some(trades) = trades_json.get("trades").and_then(|t| t.as_array()) {
             // Assuming trades are returned newest first. If they are oldest first,
@@ -214,15 +187,16 @@ impl NetworkBackend {
                     .unwrap_or(0.0);
 
                 // Undo the trade to find the balance BEFORE this trade happened
-                if t_type == "buy" {
-                    sim_usdt -= amount;
-                    sim_rls += total;
+                let trade = if t_type == "buy" {
+                    [-amount, total]
                 } else if t_type == "sell" {
-                    sim_usdt += amount;
-                    sim_rls -= total;
-                }
+                    [amount, -total]
+                } else {
+                    log::warn!("Unexpected trade type `{t_type}`");
+                    break;
+                };
 
-                trajectory.push([sim_usdt, sim_rls]);
+                trajectory.push(trade);
             }
         }
 
@@ -230,7 +204,43 @@ impl NetworkBackend {
         trajectory.reverse();
 
         let _ = self.sender.send(BackendEvent::FetchedTrades { trajectory });
-        self.ctx.request_repaint(); // Wake UI to draw the plot
+        self.ctx.request_repaint();
+    }
+
+    async fn fetch_balances(&self) {
+        let wallets_json = self
+            .fetch_endpoint("https://apiv2.nobitex.ir/users/wallets/list")
+            .await;
+
+        // 2. Extract Anchor (Current Balances)
+        let mut current_usdt = 0.0;
+        let mut current_rls = 0.0;
+
+        if let Some(wallets) = wallets_json.get("wallets").and_then(|w| w.as_array()) {
+            for wallet in wallets {
+                let currency = wallet
+                    .get("currency")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("");
+
+                let balance_str = wallet
+                    .get("balance")
+                    .and_then(|b| b.as_str())
+                    .unwrap_or("0");
+
+                let balance: f64 = balance_str.parse().unwrap_or(0.0);
+
+                if currency == "usdt" {
+                    current_usdt = balance;
+                } else if currency == "rls" {
+                    current_rls = balance;
+                }
+            }
+        }
+
+        let anchor = [current_usdt, current_rls];
+        let _ = self.sender.send(BackendEvent::FetchedBalances { anchor });
+        self.ctx.request_repaint();
     }
 
     async fn fetch_endpoint(&self, url: &str) -> Value {
@@ -253,19 +263,18 @@ impl NetworkBackend {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn spawn_local<F>(future: F)
+pub fn spawn_local<F>(future: F) -> thread::JoinHandle<F::Output>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     // On native, spin up a background thread and a lightweight Tokio runtime
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
-
-        rt.block_on(future);
-    });
+            .unwrap()
+            .block_on(future)
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -274,5 +283,5 @@ where
     F: std::future::Future<Output = ()> + 'static,
 {
     // On web, give the async task to the JavaScript event loop
-    wasm_bindgen_futures::spawn_local(future);
+    wasm_bindgen_futures::spawn_local(future)
 }
