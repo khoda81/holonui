@@ -7,17 +7,17 @@ type Allocation = [f64; 2];
 
 struct HolonApp {
     trajectory: Vec<Allocation>,
-    state: AppState,
+    mode: AppMode,
 }
 
 #[derive(Debug, Default)]
-enum AppState {
+enum AppMode {
     #[default]
     Default,
     GhostLine,
 }
 
-impl AppState {
+impl AppMode {
     /// Returns `true` if the app state is [`GhostLine`].
     ///
     /// [`GhostLine`]: AppState::GhostLine
@@ -31,16 +31,16 @@ impl HolonApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Initialize your Skyline state here in the future
         Self {
-            state: AppState::Default,
+            mode: AppMode::Default,
             trajectory: vec![[1.0, 2.0], [2.0, 1.0], [2.0, 2.0]],
         }
     }
 
     fn handle_keyboard(&mut self, ui: &mut egui::Ui) {
         if ui.input(|i| i.key_pressed(egui::Key::O)) {
-            self.state = match self.state {
-                AppState::Default => AppState::GhostLine,
-                AppState::GhostLine => AppState::Default,
+            self.mode = match self.mode {
+                AppMode::Default => AppMode::GhostLine,
+                AppMode::GhostLine => AppMode::Default,
             };
         }
     }
@@ -49,7 +49,7 @@ impl HolonApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("HolonUI - Skyline Visualizer");
 
-            let scale_plot = !self.state.is_ghost_line();
+            let scale_plot = !self.mode.is_ghost_line();
 
             let plot = Plot::new("skyline_plot")
                 // .view_aspect(2.0)
@@ -67,7 +67,7 @@ impl HolonApp {
     fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
         ui.line(Line::new("Intent Frontier", self.trajectory.clone()));
         let start_point = self.trajectory.last().copied().unwrap_or([0.0, 0.0]);
-        if let AppState::Default = self.state {
+        if let AppMode::Default = self.mode {
             return;
         }
 
@@ -86,7 +86,7 @@ impl HolonApp {
         {
             self.trajectory.push([x, y]);
             log::info!("Clicked plot at X: {x}, Y: {y}");
-            self.state = AppState::Default;
+            self.mode = AppMode::Default;
         }
     }
 }
@@ -94,7 +94,6 @@ impl HolonApp {
 impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.handle_keyboard(ui);
-
         self.render_main_plot(ui);
     }
 }
