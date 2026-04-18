@@ -1,5 +1,6 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
+use serde_json::Value;
 use std::env;
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -110,13 +111,50 @@ pub async fn fetch_nobitex_data(tx: Sender<Allocation>) {
     let api_key = env::var("NOBITEX_API_KEY").expect("NOBITEX_API_KEY must be set");
     let client = reqwest::Client::new();
 
-    // Example API Call using the Nobitex USDT endpoint
-    let url =
-        reqwest::Url::parse("https://apiv2.nobitex.ir/users/transactions-history?currency=usdt")
-            .expect("failed to parse url");
+    let rls_req = fetch_transactions(&client, &api_key, "rls");
+    let usdt_req = fetch_transactions(&client, &api_key, "usdt");
 
-    let json: serde_json::Value = client
-        .get(url)
+    // 2. Execute them in parallel using tokio::join!
+    let (rls_transactions, usdt_transactions) = tokio::join!(rls_req, usdt_req);
+
+    let Value::Array(transactions) = rls_transactions else {
+        return log::error!("Expected 'transactions' to be an array but got: {rls_transactions}");
+    };
+
+    let mut trade_index = 0.0;
+
+    // 2. Iterate in reverse (`.rev()`) to go chronologically (oldest to newest)
+    for tx_data in transactions.iter().rev() {
+        // Extract and parse the balance string into an f64
+        let balance: f64 = tx_data
+            .get("balance")
+            .and_then(|b| b.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+
+        // Optional: Extract the trade amount if you need it
+        // let amount: f64 = tx_data.get("amount").and_then(|a| a.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+
+        // 3. Define your X and Y.
+        // Here we use X = trade number, Y = USDT Balance
+        let x = trade_index;
+        let y = balance;
+
+        // Send the parsed point to the UI
+        let _ = tx.send([x, y]);
+        trade_index += 1.0;
+    }
+}
+
+async fn fetch_transactions(client: &reqwest::Client, api_key: &str, currency: &str) -> Value {
+    // Example API Call using the Nobitex USDT endpoint
+    const BASE_URL: &str = r"https://apiv2.nobitex.ir/users/transactions-history";
+
+    let mut url = reqwest::Url::parse(BASE_URL).expect("failed to parse url");
+    url.set_query(Some(&format!("currency={currency}")));
+
+    let mut json: serde_json::Value = client
+        .get(url.clone())
         .header("Authorization", format!("Token {}", api_key))
         .send()
         .await
@@ -125,34 +163,7 @@ pub async fn fetch_nobitex_data(tx: Sender<Allocation>) {
         .await
         .unwrap();
 
-    log::info!("{json}");
+    log::info!("{url}: {json:#}");
 
-    // 1. Extract the "transactions" array
-    if let Some(transactions) = json.get("transactions").and_then(|t| t.as_array()) {
-        let mut trade_index = 0.0;
-
-        // 2. Iterate in reverse (`.rev()`) to go chronologically (oldest to newest)
-        for tx_data in transactions.iter().rev() {
-            // Extract and parse the balance string into an f64
-            let balance: f64 = tx_data
-                .get("balance")
-                .and_then(|b| b.as_str())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0);
-
-            // Optional: Extract the trade amount if you need it
-            // let amount: f64 = tx_data.get("amount").and_then(|a| a.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
-
-            // 3. Define your X and Y.
-            // Here we use X = trade number, Y = USDT Balance
-            let x = trade_index;
-            let y = balance;
-
-            // Send the parsed point to the UI
-            let _ = tx.send([x, y]);
-            trade_index += 1.0;
-        }
-    } else {
-        log::error!("Failed to find 'transactions' array in API response");
-    }
+    json["transactions"].take()
 }
