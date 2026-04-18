@@ -201,31 +201,41 @@ impl NetworkBackend {
             // Assuming trades are returned newest first. If they are oldest first,
             // you'll need to .rev() the iterator here.
             for trade in trades {
-                let t_type = trade.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                let t_type = trade.get("type").and_then(|t| t.as_str()).unwrap();
 
                 let amount: f64 = trade
                     .get("amount")
                     .and_then(|a| a.as_str())
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(0.0);
+                    .unwrap();
 
                 let total: f64 = trade
                     .get("total")
                     .and_then(|t| t.as_str())
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(0.0);
+                    .unwrap();
+
+                let fee: f64 = trade
+                    .get("fee")
+                    .and_then(|f| f.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap();
 
                 // Undo the trade to find the balance BEFORE this trade happened
-                let trade = if t_type == "buy" {
-                    [-amount, total]
+                let trade_delta = if t_type == "buy" {
+                    // You received $(amount - fee)$ in USDT, and paid $total$ in RLS.
+                    // To undo: Subtract the net USDT gained, add the RLS paid.
+                    [-(amount - fee), total]
                 } else if t_type == "sell" {
-                    [amount, -total]
+                    // You paid $amount$ in USDT, and received $(total - fee)$ in RLS.
+                    // To undo: Add the USDT paid, subtract the net RLS gained.
+                    [amount, -(total - fee)]
                 } else {
                     log::warn!("Unexpected trade type `{t_type}`");
                     break;
                 };
 
-                trajectory.push(trade);
+                trajectory.push(trade_delta);
             }
         }
 
@@ -254,7 +264,7 @@ impl NetworkBackend {
                     .and_then(|b| b.as_str())
                     .unwrap_or("0");
 
-                let balance: f64 = balance_str.parse().unwrap_or(0.0);
+                let balance: f64 = balance_str.parse().unwrap();
 
                 if currency == "usdt" {
                     current_usdt = balance;
@@ -271,23 +281,21 @@ impl NetworkBackend {
 
     async fn fetch_endpoint(&self, url: &str) -> Value {
         loop {
-            let response = self
-                .client
-                .get(url)
-                .header("Authorization", format!("Token {}", self.api_key))
-                .send()
-                .await;
-
-            let err = match response {
-                Err(err) => err,
-
-                Ok(resp) => match resp.json::<Value>().await {
-                    Ok(json) => return json,
-                    Err(err) => err,
-                },
+            // Group the network request and JSON parsing into a single Result-returning async block
+            let result = async {
+                self.client
+                    .get(url)
+                    .header("Authorization", format!("Token {}", self.api_key))
+                    .send()
+                    .await?
+                    .json::<Value>()
+                    .await
             };
 
-            _ = self.sender.send(BackendEvent::RequestError(err));
+            match result.await {
+                Err(err) => _ = self.sender.send(BackendEvent::RequestError(err)),
+                Ok(json) => break json,
+            }
         }
     }
 }
