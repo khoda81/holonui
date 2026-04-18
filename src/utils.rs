@@ -1,5 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
-use std::{thread, time::Duration};
+use std::thread;
+use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_local<F>(future: F) -> thread::JoinHandle<F::Output>
@@ -34,18 +35,23 @@ pub async fn sleep_async(duration: Duration) {
 pub async fn sleep_async(duration: Duration) {
     // If you add `gloo-timers = { version = "0.3", features = ["futures"] }`:
     gloo_timers::future::sleep(duration).await;
+}
 
-    // OR if you really want to avoid gloo-timers and use `js-sys` + `web-sys`:
-    /*
-    let promise = js_sys::Promise::new(&mut |resolve, _| {
-        web_sys::window()
-            .unwrap()
-            .set_timeout_with_callback_and_timeout_and_arguments_0(
-                &resolve,
-                duration.as_millis() as i32,
-            )
-            .unwrap();
-    });
-    wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
-    */
+pub fn format_humantime(sec: f64) -> String {
+    let std_dur = std::time::Duration::from_secs_f64(sec);
+    let chrono_dur = chrono::TimeDelta::from_std(std_dur).unwrap();
+
+    // 2. Extract components
+    let total_days = chrono_dur.num_days();
+    let hours = chrono_dur.num_hours() % 24;
+    let mins = chrono_dur.num_minutes() % 60;
+    let secs = chrono_dur.num_seconds() % 60;
+
+    match sec {
+        ..60.0 => format!("{sec:.0} sec"),
+        ..3600.0 => format!("{mins:.0} min {secs:.0} s"),
+        ..86400.0 => format!("{hours:.0} hr {mins:.0} m"),
+        ..31_536_000.0 => format!("{total_days:.0} days {hours:.0} h"),
+        _ => format!("{:.1} years", total_days / 356),
+    }
 }

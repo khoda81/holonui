@@ -3,7 +3,7 @@ mod backend;
 use crate::{
     Allocation,
     app::backend::{BackendEvent, NetworkBackend},
-    utils::spawn_local,
+    utils::{format_humantime, spawn_local},
 };
 use chrono::{DateTime, Utc};
 use egui::ecolor::Rgba;
@@ -103,19 +103,7 @@ impl HolonApp {
                 ui.add(
                     egui::Slider::new(&mut self.time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
                         .logarithmic(true)
-                        .custom_formatter(|sec, _| match sec {
-                            ..60.0 => format!("{:.0} sec", sec),
-                            ..3600.0 => format!("{:.0} min {:.0} s", sec / 60.0, sec % 60.0),
-                            ..86400.0 => {
-                                format!("{:.0} hr {:.0} m", sec / 3600.0, (sec % 3600.0) / 60.0)
-                            }
-                            ..31_536_000.0 => format!(
-                                "{:.0} days {:.0} h",
-                                sec / 86400.0,
-                                (sec % 86400.0) / 3600.0
-                            ),
-                            _ => format!("{:.1} years", sec / 31_536_000.0),
-                        }),
+                        .custom_formatter(|sec, _| format_humantime(sec)),
                 );
             });
             let scale_plot = !self.mode.is_ghost_line();
