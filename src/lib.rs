@@ -136,7 +136,7 @@ impl eframe::App for HolonApp {
     }
 }
 
-pub struct NetworkBackend {
+struct NetworkBackend {
     sender: Sender<BackendEvent>,
     ctx: egui::Context,
     client: reqwest::Client,
@@ -154,146 +154,102 @@ impl NetworkBackend {
     }
 
     pub async fn fetch_nobitex_data(&self) {
-        // 1. Fetch all pages concurrently
-        let (rls_data, usdt_data) = futures::join!(
-            self.fetch_all_transactions("rls"),
-            self.fetch_all_transactions("usdt")
+        // 1. Fetch Wallets and Trades concurrently using runtime-agnostic join!
+        let (wallets_json, trades_json) = futures::join!(
+            self.fetch_endpoint("https://apiv2.nobitex.ir/users/wallets/list"),
+            self.fetch_endpoint(
+                "https://apiv2.nobitex.ir/market/trades/list?srcCurrency=usdt&dstCurrency=rls"
+            )
         );
 
-        let mut timeline = Vec::new();
-
-        // 2. Parse and push to a unified timeline
-        let mut parse_into_timeline = |transactions: Vec<Value>, currency: &str| {
-            for tx_data in transactions {
-                let balance = tx_data
-                    .get("balance")
-                    .and_then(|b| b.as_str())
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0.0);
-
-                let desc = tx_data
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                let time_str = tx_data
-                    .get("created_at")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
-
-                if let Ok(time) = time_str.parse::<DateTime<Utc>>() {
-                    timeline.push(RawTx {
-                        time,
-                        currency: currency.to_string(),
-                        balance,
-                        description: desc,
-                    });
-                }
-            }
-        };
-
-        parse_into_timeline(rls_data, "rls");
-        parse_into_timeline(usdt_data, "usdt");
-
-        // 3. Sort chronologically (oldest first)
-        timeline.sort_by_key(|t| t.time);
-
-        // 4. State tracking & Deduplication (Pairing)
+        // 2. Extract Anchor (Current Balances)
         let mut current_usdt = 0.0;
         let mut current_rls = 0.0;
 
-        let mut i = 0;
-        while i < timeline.len() {
-            let current_tx = &timeline[i];
+        if let Some(wallets) = wallets_json.get("wallets").and_then(|w| w.as_array()) {
+            for wallet in wallets {
+                let currency = wallet
+                    .get("currency")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("");
+                let balance_str = wallet
+                    .get("balance")
+                    .and_then(|b| b.as_str())
+                    .unwrap_or("0");
+                let balance: f64 = balance_str.parse().unwrap_or(0.0);
 
-            // Update the balance for the current transaction
-            if current_tx.currency == "usdt" {
-                current_usdt = current_tx.balance;
-            } else {
-                current_rls = current_tx.balance;
-            }
-
-            // Look ahead to see if the VERY NEXT transaction is the other half of this trade
-            // (Must be within ~10 seconds and have the exact same description)
-            if i + 1 < timeline.len() {
-                let next_tx = &timeline[i + 1];
-                let time_diff = (next_tx.time - current_tx.time).num_seconds().abs();
-
-                if time_diff < 10
-                    && next_tx.description == current_tx.description
-                    && next_tx.currency != current_tx.currency
-                {
-                    // It's a pair! Update the other balance immediately before emitting the coordinate
-                    if next_tx.currency == "usdt" {
-                        current_usdt = next_tx.balance;
-                    } else {
-                        current_rls = next_tx.balance;
-                    }
-
-                    // Skip the next one since we just processed it
-                    i += 1;
+                if currency == "usdt" {
+                    current_usdt = balance;
+                } else if currency == "rls" {
+                    current_rls = balance;
                 }
-            }
-
-            // Emit the synchronized coordinate (No staircases!)
-            // X = USDT, Y = IRT
-            // let _ = self.sender.send([current_usdt, current_rls]);
-            i += 1;
-        }
-    }
-
-    // Updated fetching function with pagination
-    async fn fetch_all_transactions(&self, currency: &str) -> Vec<Value> {
-        const BASE_URL: &str = r"https://apiv2.nobitex.ir/users/transactions-history";
-        let mut all_transactions = Vec::new();
-        let mut page = 1;
-
-        loop {
-            let mut url = reqwest::Url::parse(BASE_URL).unwrap();
-            // The API uses `page` for pagination
-            url.set_query(Some(&format!("currency={}&page={}", currency, page)));
-
-            let mut json: Value = self
-                .client
-                .get(url.clone())
-                .header("Authorization", format!("Token {}", self.api_key))
-                .send()
-                .await
-                .unwrap()
-                .json()
-                .await
-                .unwrap();
-
-            if let Some(transactions) = json["transactions"].take().as_array_mut() {
-                if transactions.is_empty() {
-                    break; // No more data
-                }
-
-                let count = transactions.len();
-                all_transactions.append(transactions);
-
-                // If we received fewer than the default 50, we've hit the last page
-                if count < 50 {
-                    break;
-                }
-                page += 1;
-            } else {
-                break; // Handle unexpected JSON structure
             }
         }
 
-        all_transactions
-    }
-}
+        let anchor = [current_usdt, current_rls];
+        let _ = self.sender.send(BackendEvent::FetchedBalances { anchor });
+        self.ctx.request_repaint(); // Wake UI to show anchor immediately
 
-// Helper struct for sorting and merging
-#[derive(Debug, Clone)]
-struct RawTx {
-    time: DateTime<Utc>,
-    currency: String,
-    balance: f64,
-    description: String,
+        // 3. Reconstruct Trajectory Backwards
+        let mut trajectory = vec![anchor];
+        let mut sim_usdt = current_usdt;
+        let mut sim_rls = current_rls;
+
+        if let Some(trades) = trades_json.get("trades").and_then(|t| t.as_array()) {
+            // Assuming trades are returned newest first. If they are oldest first,
+            // you'll need to .rev() the iterator here.
+            for trade in trades {
+                let t_type = trade.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                let amount: f64 = trade
+                    .get("amount")
+                    .and_then(|a| a.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
+
+                let total: f64 = trade
+                    .get("total")
+                    .and_then(|t| t.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
+
+                // Undo the trade to find the balance BEFORE this trade happened
+                if t_type == "buy" {
+                    sim_usdt -= amount;
+                    sim_rls += total;
+                } else if t_type == "sell" {
+                    sim_usdt += amount;
+                    sim_rls -= total;
+                }
+
+                trajectory.push([sim_usdt, sim_rls]);
+            }
+        }
+
+        // Reverse to make it chronological (oldest to newest) for plotting
+        trajectory.reverse();
+
+        let _ = self.sender.send(BackendEvent::FetchedTrades { trajectory });
+        self.ctx.request_repaint(); // Wake UI to draw the plot
+    }
+
+    async fn fetch_endpoint(&self, url: &str) -> Value {
+        let response = self
+            .client
+            .get(url)
+            .header("Authorization", format!("Token {}", self.api_key))
+            .send()
+            .await;
+
+        if let Ok(resp) = response
+            && let Ok(json) = resp.json::<Value>().await
+        {
+            return json;
+        }
+
+        // Return an empty JSON object as a fallback if anything fails
+        serde_json::json!(null)
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
