@@ -107,13 +107,25 @@ fn main() -> eframe::Result<()> {
     // ----------------------------------------------------
     #[cfg(target_arch = "wasm32")]
     {
+        use web_sys::wasm_bindgen::JsCast;
+
         eframe::WebLogger::init(log::LevelFilter::Debug).ok();
+
+        let document = web_sys::window().unwrap().document().unwrap();
+        let canvas_element = document
+            .get_element_by_id("the_canvas_id")
+            .expect("Failed to find canvas element");
+
+        let canvas = canvas_element
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .expect("Element is not a canvas");
+
         let web_options = eframe::WebOptions::default();
 
         wasm_bindgen_futures::spawn_local(async {
             eframe::WebRunner::new()
                 .start(
-                    "the_canvas_id",
+                    canvas,
                     web_options,
                     // FIX: Wrapped the return value in Ok()
                     Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
