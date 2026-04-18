@@ -98,16 +98,26 @@ impl HolonApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("HolonUI - Skyline Visualizer");
 
-            // Add the exponential slider for adjusting the time unit
             ui.horizontal(|ui| {
-                ui.label("Time Unit (Seconds):");
+                ui.label("Time Unit:");
                 ui.add(
-                    egui::Slider::new(&mut self.time_unit_sec, 1.0..=31_536_000.0) // 1 min to 1 year
+                    egui::Slider::new(&mut self.time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
                         .logarithmic(true)
-                        .text("sec"),
+                        .custom_formatter(|sec, _| match sec {
+                            ..60.0 => format!("{:.0} sec", sec),
+                            ..3600.0 => format!("{:.0} min {:.0} s", sec / 60.0, sec % 60.0),
+                            ..86400.0 => {
+                                format!("{:.0} hr {:.0} m", sec / 3600.0, (sec % 3600.0) / 60.0)
+                            }
+                            ..31_536_000.0 => format!(
+                                "{:.0} days {:.0} h",
+                                sec / 86400.0,
+                                (sec % 86400.0) / 3600.0
+                            ),
+                            _ => format!("{:.1} years", sec / 31_536_000.0),
+                        }),
                 );
             });
-
             let scale_plot = !self.mode.is_ghost_line();
 
             let plot = Plot::new("skyline_plot")
