@@ -1,7 +1,7 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
-use serde_json::Value;
 use std::env;
 use std::sync::mpsc::{Receiver, Sender};
 #[cfg(not(target_arch = "wasm32"))]
@@ -198,6 +198,18 @@ enum TradeType {
     Sell,
 }
 
+#[derive(Deserialize, Debug)]
+struct WalletsResponse {
+    wallets: Vec<Wallet>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Wallet {
+    currency: String,
+    #[serde(deserialize_with = "f64_from_str")]
+    balance: f64,
+}
+
 struct NetworkBackend {
     sender: Sender<BackendEvent>,
     ctx: egui::Context,
@@ -220,25 +232,15 @@ impl NetworkBackend {
     }
 
     async fn fetch_trajectory(&self) {
-        let trades_json = self
+        let trades_response: TradesResponse = self
             .fetch_endpoint(
                 "https://apiv2.nobitex.ir/market/trades/list?srcCurrency=usdt&dstCurrency=rls",
             )
             .await;
 
-        log::trace!("{trades_json}");
+        log::trace!("{trades_response:?}");
 
-        // Deserialize the raw JSON Value into our strictly-typed structs
-        let parsed_response: TradesResponse = match serde_json::from_value(trades_json) {
-            Ok(res) => res,
-            Err(err) => {
-                log::error!("Failed to parse trades data: {}", err);
-
-                return;
-            }
-        };
-
-        let trajectory: Vec<[f64; 2]> = parsed_response
+        let trajectory: Vec<[f64; 2]> = trades_response
             .trades
             .into_iter()
             .map(|trade| {
@@ -259,42 +261,30 @@ impl NetworkBackend {
     }
 
     async fn fetch_balances(&self) {
-        let wallets_json = self
+        // Automatically fetches and parses into WalletsResponse
+        let response: WalletsResponse = self
             .fetch_endpoint("https://apiv2.nobitex.ir/users/wallets/list")
             .await;
 
-        // 2. Extract Anchor (Current Balances)
         let mut current_usdt = 0.0;
         let mut current_rls = 0.0;
 
-        if let Some(wallets) = wallets_json.get("wallets").and_then(|w| w.as_array()) {
-            for wallet in wallets {
-                let currency = wallet
-                    .get("currency")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("");
-
-                let balance_str = wallet
-                    .get("balance")
-                    .and_then(|b| b.as_str())
-                    .unwrap_or("0");
-
-                let balance: f64 = balance_str.parse().unwrap();
-
-                if currency == "usdt" {
-                    current_usdt = balance;
-                } else if currency == "rls" {
-                    current_rls = balance;
-                }
+        for wallet in response.wallets {
+            if wallet.currency == "usdt" {
+                current_usdt = wallet.balance;
+            } else if wallet.currency == "rls" {
+                current_rls = wallet.balance;
             }
         }
 
-        let anchor = [current_usdt, current_rls];
-        let _ = self.sender.send(BackendEvent::FetchedBalances { anchor });
+        let _ = self.sender.send(BackendEvent::FetchedBalances {
+            anchor: [current_usdt, current_rls],
+        });
+
         self.ctx.request_repaint();
     }
 
-    async fn fetch_endpoint(&self, url: &str) -> Value {
+    async fn fetch_endpoint<T: DeserializeOwned>(&self, url: &str) -> T {
         loop {
             // Group the network request and JSON parsing into a single Result-returning async block
             let result = async {
@@ -303,13 +293,13 @@ impl NetworkBackend {
                     .header("Authorization", format!("Token {}", self.api_key))
                     .send()
                     .await?
-                    .json::<Value>()
+                    .json::<T>()
                     .await
             };
 
             match result.await {
+                Ok(parsed) => break parsed,
                 Err(err) => _ = self.sender.send(BackendEvent::RequestError(err)),
-                Ok(json) => break json,
             }
         }
     }
