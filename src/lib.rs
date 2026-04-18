@@ -240,7 +240,7 @@ impl NetworkBackend {
 
         log::trace!("{trades_response:?}");
 
-        let trajectory: Vec<[f64; 2]> = trades_response
+        let trajectory = trades_response
             .trades
             .into_iter()
             .map(|trade| {
@@ -256,8 +256,12 @@ impl NetworkBackend {
             })
             .collect();
 
-        let _ = self.sender.send(BackendEvent::FetchedTrades { trajectory });
-        self.ctx.request_repaint();
+        self.send_event(BackendEvent::FetchedTrades { trajectory });
+    }
+
+    fn send_event(&self, event: BackendEvent) {
+        let _ = self.sender.send(event);
+        self.ctx.request_repaint()
     }
 
     async fn fetch_balances(&self) {
@@ -277,11 +281,9 @@ impl NetworkBackend {
             }
         }
 
-        let _ = self.sender.send(BackendEvent::FetchedBalances {
+        self.send_event(BackendEvent::FetchedBalances {
             anchor: [current_usdt, current_rls],
         });
-
-        self.ctx.request_repaint();
     }
 
     async fn fetch_endpoint<T: DeserializeOwned>(&self, url: &str) -> T {
@@ -299,7 +301,7 @@ impl NetworkBackend {
 
             match result.await {
                 Ok(parsed) => break parsed,
-                Err(err) => _ = self.sender.send(BackendEvent::RequestError(err)),
+                Err(err) => self.send_event(BackendEvent::RequestError(err)),
             }
         }
     }
