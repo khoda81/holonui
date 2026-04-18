@@ -1,6 +1,5 @@
 mod models;
 
-use super::Allocation;
 use crate::{
     app::backend::models::{TradeType, TradesResponse, WalletsResponse},
     utils::sleep_async,
@@ -9,8 +8,8 @@ use serde::de::DeserializeOwned;
 use std::{sync::mpsc::Sender, time::Duration};
 
 pub enum BackendEvent {
-    FetchedTrades { trajectory: Vec<Allocation> },
-    FetchedBalances { anchor: Allocation },
+    FetchedTrades { trajectory: Vec<super::Trade> },
+    FetchedBalances { anchor: super::Allocation },
     RequestError(reqwest::Error),
 }
 
@@ -58,10 +57,7 @@ impl NetworkBackend {
 
         let trajectory = all_trades
             .into_iter()
-            .map(|trade| match trade.trade_type {
-                TradeType::Buy => [-(trade.amount - trade.fee), trade.total],
-                TradeType::Sell => [trade.amount, -(trade.total - trade.fee)],
-            })
+            .map(models::Trade::into_trade)
             .collect();
 
         self.send_event(BackendEvent::FetchedTrades { trajectory });

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer};
 
 // Helper function to deserialize stringified numbers into f64
@@ -26,6 +27,21 @@ pub struct Trade {
     pub total: f64,
     #[serde(deserialize_with = "f64_from_str")]
     pub fee: f64,
+    pub timestamp: DateTime<Utc>, // Chrono handles the parsing automatically
+}
+
+impl Trade {
+    pub fn into_trade(trade: Self) -> crate::app::Trade {
+        let delta = match trade.trade_type {
+            TradeType::Buy => [-(trade.amount - trade.fee), trade.total],
+            TradeType::Sell => [trade.amount, -(trade.total - trade.fee)],
+        };
+
+        crate::app::Trade {
+            delta,
+            timestamp: trade.timestamp,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq)]

@@ -5,6 +5,8 @@ use crate::{
     app::backend::{BackendEvent, NetworkBackend},
     utils::spawn_local,
 };
+use chrono::{DateTime, Utc};
+use egui::ecolor::Rgba;
 use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
 use std::sync::mpsc::Receiver;
 
@@ -25,11 +27,30 @@ impl AppMode {
     }
 }
 
+struct Trade {
+    delta: [f64; 2],
+    timestamp: DateTime<Utc>,
+}
+
 pub struct HolonApp {
-    trajectory: Vec<Allocation>,
+    trajectory: Vec<Trade>,
     anchor: Allocation,
     mode: AppMode,
     api_receiver: Receiver<BackendEvent>, // Receives data from the async task
+}
+
+fn get_color_rgba(t: f32) -> egui::Color32 {
+    let start_color = Rgba::from(egui::Color32::from_rgb(68, 1, 84)); // Dark purple
+    let end_color = Rgba::from(egui::Color32::from_rgb(253, 231, 37)); // Yellow
+
+    // let mixed_rgba = Rgba::from_rgb(
+    //     egui::lerp(start_color.l..=end_color.l, t),
+    //     egui::lerp(start_color.a..=end_color.a, t),
+    //     egui::lerp(start_color.b..=end_color.b, t),
+    // );
+    let mixed_rgba = egui::lerp(start_color..=end_color, t);
+
+    egui::Color32::from(mixed_rgba)
 }
 
 impl HolonApp {
@@ -45,27 +66,18 @@ impl HolonApp {
 
         Self {
             mode: AppMode::Default,
-            trajectory: vec![], // Start at origin
+            trajectory: vec![],
             anchor: [0.0, 0.0],
             api_receiver: rx,
         }
     }
 
-    // The Update function: The ONLY place where state changes happen.
-    // Call this once per frame before drawing.
     pub fn update(&mut self) {
         // Process all pending messages from the background
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
-                BackendEvent::FetchedBalances { anchor } => {
-                    log::info!("Received anchor: {anchor:?}");
-                    self.anchor = anchor
-                }
-                BackendEvent::FetchedTrades { trajectory } => {
-                    log::info!("Received trades: {trajectory:?}");
-                    self.trajectory = trajectory
-                }
-                // TODO:
+                BackendEvent::FetchedBalances { anchor } => self.anchor = anchor,
+                BackendEvent::FetchedTrades { trajectory } => self.trajectory = trajectory,
                 BackendEvent::RequestError(err) => {
                     log::error!("Request Error: {err}")
                 }
@@ -100,18 +112,38 @@ impl HolonApp {
             plot.show(ui, |ui| self.render_plot_contents(ui));
         });
     }
+
     fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
         // 1. Calculate absolute trajectory relative to the anchor
         let mut absolute_points = vec![self.anchor];
         let mut current_point = self.anchor;
 
-        for delta in &self.trajectory {
-            current_point[0] += delta[0];
-            current_point[1] += delta[1];
+        // Get the current time
+        let now = Utc::now();
+
+        const TIME_UNIT: chrono::TimeDelta = chrono::Duration::minutes(1);
+
+        // Draw the trajectory as multiple segments to support different colors
+        for &Trade { delta, timestamp } in self.trajectory.iter() {
+            let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
+
+            let time_delta = timestamp - now;
+            let delta_t = (time_delta) / TIME_UNIT;
+            let weight = delta_t.exp(); // value between 0 and 1
+
+            let color = get_color_rgba(weight);
+
+            let segment = Line::new(
+                "Intent Frontier Segment",
+                PlotPoints::new(vec![current_point, next_point]),
+            )
+            .color(color);
+
+            ui.line(segment);
+
+            current_point = next_point;
             absolute_points.push(current_point);
         }
-
-        ui.line(Line::new("Intent Frontier", absolute_points.clone()));
 
         ui.points(
             egui_plot::Points::new("Anchor (Current Balance)", vec![self.anchor])
