@@ -136,35 +136,33 @@ async fn fetch_nobitex_data(tx: Sender<Allocation>) {
 
 #[cfg(target_arch = "wasm32")]
 fn main() -> eframe::Result<()> {
-    {
-        use web_sys::wasm_bindgen::JsCast;
+    use web_sys::wasm_bindgen::JsCast;
 
-        eframe::WebLogger::init(log::LevelFilter::Debug).ok();
+    eframe::WebLogger::init(log::LevelFilter::Debug).ok();
 
-        let document = web_sys::window().unwrap().document().unwrap();
-        let canvas_element = document
-            .get_element_by_id("the_canvas_id")
-            .expect("Failed to find canvas element");
+    let document = web_sys::window().unwrap().document().unwrap();
+    let canvas_element = document
+        .get_element_by_id("the_canvas_id")
+        .expect("Failed to find canvas element");
 
-        let canvas = canvas_element
-            .dyn_into::<web_sys::HtmlCanvasElement>()
-            .expect("Element is not a canvas");
+    let canvas = canvas_element
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .expect("Element is not a canvas");
 
-        let web_options = eframe::WebOptions::default();
+    let web_options = eframe::WebOptions::default();
 
-        wasm_bindgen_futures::spawn_local(async {
-            eframe::WebRunner::new()
-                .start(
-                    canvas,
-                    web_options,
-                    // FIX: Wrapped the return value in Ok()
-                    Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
-                )
-                .await
-                .expect("failed to start eframe");
-        });
-        Ok(())
-    }
+    wasm_bindgen_futures::spawn_local(async {
+        eframe::WebRunner::new()
+            .start(
+                canvas,
+                web_options,
+                // FIX: Wrapped the return value in Ok()
+                Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
+            )
+            .await
+            .expect("failed to start eframe");
+    });
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
