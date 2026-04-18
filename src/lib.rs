@@ -12,7 +12,7 @@ pub enum BackendEvent {
     SyncStarted,
     FetchedTrades { trajectory: Vec<Allocation> },
     FetchedBalances { anchor: Allocation },
-    SyncFailed(String),
+    RequestError(reqwest::Error),
 }
 
 #[derive(Debug, Default)]
@@ -74,7 +74,9 @@ impl HolonApp {
                     self.trajectory = trajectory
                 }
                 // TODO:
-                BackendEvent::SyncFailed(err) => _ = err,
+                BackendEvent::RequestError(err) => {
+                    log::error!("Request Error: {err}")
+                }
             }
         }
     }
@@ -190,6 +192,8 @@ impl NetworkBackend {
             )
             .await;
 
+        log::trace!("{trades_json}");
+
         // 3. Reconstruct Trajectory Backwards
         let mut trajectory = vec![];
 
@@ -224,9 +228,6 @@ impl NetworkBackend {
                 trajectory.push(trade);
             }
         }
-
-        // Reverse to make it chronological (oldest to newest) for plotting
-        trajectory.reverse();
 
         let _ = self.sender.send(BackendEvent::FetchedTrades { trajectory });
         self.ctx.request_repaint();
@@ -269,21 +270,25 @@ impl NetworkBackend {
     }
 
     async fn fetch_endpoint(&self, url: &str) -> Value {
-        let response = self
-            .client
-            .get(url)
-            .header("Authorization", format!("Token {}", self.api_key))
-            .send()
-            .await;
+        loop {
+            let response = self
+                .client
+                .get(url)
+                .header("Authorization", format!("Token {}", self.api_key))
+                .send()
+                .await;
 
-        if let Ok(resp) = response
-            && let Ok(json) = resp.json::<Value>().await
-        {
-            return json;
+            let err = match response {
+                Err(err) => err,
+
+                Ok(resp) => match resp.json::<Value>().await {
+                    Ok(json) => return json,
+                    Err(err) => err,
+                },
+            };
+
+            _ = self.sender.send(BackendEvent::RequestError(err));
         }
-
-        // Return an empty JSON object as a fallback if anything fails
-        serde_json::json!(null)
     }
 }
 
