@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use holonui::*;
-use std::sync::mpsc;
+
 #[cfg(target_arch = "wasm32")]
 fn main() -> eframe::Result<()> {
     use web_sys::wasm_bindgen::JsCast;
@@ -19,20 +19,13 @@ fn main() -> eframe::Result<()> {
 
     let web_options = eframe::WebOptions::default();
 
-    let (tx, rx) = mpsc::channel::<Allocation>();
-
-    std::thread::spawn(move || {
-        _ = tx;
-        todo!()
-    });
-
     wasm_bindgen_futures::spawn_local(async {
         eframe::WebRunner::new()
             .start(
                 canvas,
                 web_options,
                 // FIX: Wrapped the return value in Ok()
-                Box::new(|cc| Ok(Box::new(HolonApp::new(cc, rx)))),
+                Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
             )
             .await
             .expect("failed to start eframe");
@@ -48,22 +41,11 @@ fn main() -> eframe::Result<()> {
 
     log::info!("Starting HolonApp...");
 
-    // 2. Setup communication channel between Tokio and egui
-    let (tx, rx) = mpsc::channel::<BackendEvent>();
-
-    std::thread::spawn(move || {
-        let backend = NetworkBackend::new(tx);
-
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(async { tokio::join!(backend.fetch_nobitex_data()) });
-    });
-
     // 4. Start the native UI
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
         "Holon eFrame App",
         native_options,
-        Box::new(|cc| Ok(Box::new(HolonApp::new(cc, rx)))),
+        Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
     )
 }

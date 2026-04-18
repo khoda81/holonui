@@ -39,23 +39,21 @@ pub struct HolonApp {
 }
 
 impl HolonApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, api_receiver: Receiver<BackendEvent>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx_clone = cc.egui_ctx.clone();
 
-        // 1. Create the backend
-        let backend = NetworkBackend::new(tx, ctx_clone);
-
-        // 2. Spawn the task using a cross-platform helper
         spawn_local(async move {
-            backend.fetch_nobitex_data().await;
+            NetworkBackend::new(tx, ctx_clone)
+                .fetch_nobitex_data()
+                .await
         });
 
         Self {
             mode: AppMode::Default,
             trajectory: vec![], // Start at origin
             anchor: [0.0, 0.0],
-            api_receiver,
+            api_receiver: rx,
         }
     }
 
@@ -140,22 +138,24 @@ impl eframe::App for HolonApp {
 
 pub struct NetworkBackend {
     sender: Sender<BackendEvent>,
+    ctx: egui::Context,
     client: reqwest::Client,
     api_key: String,
 }
 
 impl NetworkBackend {
-    pub fn new(sender: Sender<BackendEvent>) -> Self {
+    pub fn new(sender: Sender<BackendEvent>, ctx: egui::Context) -> Self {
         Self {
             sender,
+            ctx,
             client: reqwest::Client::new(),
-            api_key: env::var("NOBITEX_API_KEY").expect("NOBITEX_API_KEY must be set"),
+            api_key: env::var("NOBITEX_API_KEY").unwrap_or_default(),
         }
     }
 
     pub async fn fetch_nobitex_data(&self) {
         // 1. Fetch all pages concurrently
-        let (rls_data, usdt_data) = tokio::join!(
+        let (rls_data, usdt_data) = futures::join!(
             self.fetch_all_transactions("rls"),
             self.fetch_all_transactions("usdt")
         );
