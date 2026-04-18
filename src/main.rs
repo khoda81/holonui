@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
 
 type Allocation = [f64; 2];
 
@@ -71,11 +71,13 @@ impl eframe::App for HolonApp {
             plot.show(panel_ui, |plot_ui| {
                 plot_ui.line(Line::new("Intent Frontier", self.trajectory.clone()));
 
-                let start_point = [2.0, 2.0];
+                let start_point = self.trajectory.last().copied().unwrap_or([0.0, 0.0]);
 
-                if let AppState::GhostLine = self.state
-                    && let Some(mouse_pos) = plot_ui.pointer_coordinate()
-                {
+                if let AppState::Default = self.state {
+                    return;
+                }
+
+                if let Some(mouse_pos) = plot_ui.pointer_coordinate() {
                     let ghost_points = vec![start_point, [mouse_pos.x, mouse_pos.y]];
 
                     let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
@@ -86,11 +88,10 @@ impl eframe::App for HolonApp {
                 }
 
                 if plot_ui.response().clicked()
-                    && let Some(click_pos) = plot_ui.pointer_coordinate()
+                    && let Some(PlotPoint { x, y }) = plot_ui.pointer_coordinate()
                 {
-                    log::info!("Clicked plot at X: {}, Y: {}", click_pos.x, click_pos.y);
-                    // Here you would save `click_pos` to your HolonApp struct's state
-                    // to make the line permanent!
+                    self.trajectory.push([x, y]);
+                    log::info!("Clicked plot at X: {x}, Y: {y}");
                 }
             });
         });
