@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoint, PlotPoints};
 use serde_json::Value;
@@ -5,6 +6,13 @@ use std::env;
 use std::sync::mpsc::{Receiver, Sender};
 
 pub type Allocation = [f64; 2];
+
+pub enum BackendEvent {
+    SyncStarted,
+    FetchedTrades { trajectory: Vec<Allocation> },
+    FetchedBalances { anchor: Allocation },
+    SyncFailed(String),
+}
 
 #[derive(Debug, Default)]
 enum AppMode {
@@ -25,16 +33,44 @@ impl AppMode {
 
 pub struct HolonApp {
     trajectory: Vec<Allocation>,
+    anchor: Allocation,
     mode: AppMode,
-    api_receiver: Receiver<Allocation>, // Receives data from the async task
+    api_receiver: Receiver<BackendEvent>, // Receives data from the async task
 }
 
 impl HolonApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, rx: Receiver<Allocation>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, api_receiver: Receiver<BackendEvent>) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx_clone = cc.egui_ctx.clone();
+
+        // 1. Create the backend
+        let backend = NetworkBackend::new(tx, ctx_clone);
+
+        // 2. Spawn the task using a cross-platform helper
+        spawn_local(async move {
+            backend.fetch_nobitex_data().await;
+        });
+
         Self {
             mode: AppMode::Default,
-            trajectory: vec![[0.0, 0.0]], // Start at origin
-            api_receiver: rx,
+            trajectory: vec![], // Start at origin
+            anchor: [0.0, 0.0],
+            api_receiver,
+        }
+    }
+
+    // The Update function: The ONLY place where state changes happen.
+    // Call this once per frame before drawing.
+    pub fn update(&mut self) {
+        // Process all pending messages from the background
+        while let Ok(event) = self.api_receiver.try_recv() {
+            match event {
+                BackendEvent::SyncStarted => {}
+                BackendEvent::FetchedBalances { anchor } => self.anchor = anchor,
+                BackendEvent::FetchedTrades { trajectory } => self.trajectory = trajectory,
+                // TODO:
+                BackendEvent::SyncFailed(err) => _ = err,
+            }
         }
     }
 
@@ -95,75 +131,192 @@ impl HolonApp {
 
 impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 1. Drain the channel to update trajectory smoothly without blocking UI
-        while let Ok(new_allocation) = self.api_receiver.try_recv() {
-            self.trajectory.push(new_allocation);
-        }
+        self.update();
 
-        // 2. Render UI
         self.handle_keyboard(ui);
         self.render_main_plot(ui);
     }
 }
 
-// The Async API Call
-pub async fn fetch_nobitex_data(tx: Sender<Allocation>) {
-    let api_key = env::var("NOBITEX_API_KEY").expect("NOBITEX_API_KEY must be set");
-    let client = reqwest::Client::new();
+pub struct NetworkBackend {
+    sender: Sender<BackendEvent>,
+    client: reqwest::Client,
+    api_key: String,
+}
 
-    let rls_req = fetch_transactions(&client, &api_key, "rls");
-    let usdt_req = fetch_transactions(&client, &api_key, "usdt");
+impl NetworkBackend {
+    pub fn new(sender: Sender<BackendEvent>) -> Self {
+        Self {
+            sender,
+            client: reqwest::Client::new(),
+            api_key: env::var("NOBITEX_API_KEY").expect("NOBITEX_API_KEY must be set"),
+        }
+    }
 
-    // 2. Execute them in parallel using tokio::join!
-    let (rls_transactions, usdt_transactions) = tokio::join!(rls_req, usdt_req);
+    pub async fn fetch_nobitex_data(&self) {
+        // 1. Fetch all pages concurrently
+        let (rls_data, usdt_data) = tokio::join!(
+            self.fetch_all_transactions("rls"),
+            self.fetch_all_transactions("usdt")
+        );
 
-    let Value::Array(transactions) = rls_transactions else {
-        return log::error!("Expected 'transactions' to be an array but got: {rls_transactions}");
-    };
+        let mut timeline = Vec::new();
 
-    let mut trade_index = 0.0;
+        // 2. Parse and push to a unified timeline
+        let mut parse_into_timeline = |transactions: Vec<Value>, currency: &str| {
+            for tx_data in transactions {
+                let balance = tx_data
+                    .get("balance")
+                    .and_then(|b| b.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
 
-    // 2. Iterate in reverse (`.rev()`) to go chronologically (oldest to newest)
-    for tx_data in transactions.iter().rev() {
-        // Extract and parse the balance string into an f64
-        let balance: f64 = tx_data
-            .get("balance")
-            .and_then(|b| b.as_str())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
+                let desc = tx_data
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
-        // Optional: Extract the trade amount if you need it
-        // let amount: f64 = tx_data.get("amount").and_then(|a| a.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                let time_str = tx_data
+                    .get("created_at")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
 
-        // 3. Define your X and Y.
-        // Here we use X = trade number, Y = USDT Balance
-        let x = trade_index;
-        let y = balance;
+                if let Ok(time) = time_str.parse::<DateTime<Utc>>() {
+                    timeline.push(RawTx {
+                        time,
+                        currency: currency.to_string(),
+                        balance,
+                        description: desc,
+                    });
+                }
+            }
+        };
 
-        // Send the parsed point to the UI
-        let _ = tx.send([x, y]);
-        trade_index += 1.0;
+        parse_into_timeline(rls_data, "rls");
+        parse_into_timeline(usdt_data, "usdt");
+
+        // 3. Sort chronologically (oldest first)
+        timeline.sort_by_key(|t| t.time);
+
+        // 4. State tracking & Deduplication (Pairing)
+        let mut current_usdt = 0.0;
+        let mut current_rls = 0.0;
+
+        let mut i = 0;
+        while i < timeline.len() {
+            let current_tx = &timeline[i];
+
+            // Update the balance for the current transaction
+            if current_tx.currency == "usdt" {
+                current_usdt = current_tx.balance;
+            } else {
+                current_rls = current_tx.balance;
+            }
+
+            // Look ahead to see if the VERY NEXT transaction is the other half of this trade
+            // (Must be within ~10 seconds and have the exact same description)
+            if i + 1 < timeline.len() {
+                let next_tx = &timeline[i + 1];
+                let time_diff = (next_tx.time - current_tx.time).num_seconds().abs();
+
+                if time_diff < 10
+                    && next_tx.description == current_tx.description
+                    && next_tx.currency != current_tx.currency
+                {
+                    // It's a pair! Update the other balance immediately before emitting the coordinate
+                    if next_tx.currency == "usdt" {
+                        current_usdt = next_tx.balance;
+                    } else {
+                        current_rls = next_tx.balance;
+                    }
+
+                    // Skip the next one since we just processed it
+                    i += 1;
+                }
+            }
+
+            // Emit the synchronized coordinate (No staircases!)
+            // X = USDT, Y = IRT
+            // let _ = self.sender.send([current_usdt, current_rls]);
+            i += 1;
+        }
+    }
+
+    // Updated fetching function with pagination
+    async fn fetch_all_transactions(&self, currency: &str) -> Vec<Value> {
+        const BASE_URL: &str = r"https://apiv2.nobitex.ir/users/transactions-history";
+        let mut all_transactions = Vec::new();
+        let mut page = 1;
+
+        loop {
+            let mut url = reqwest::Url::parse(BASE_URL).unwrap();
+            // The API uses `page` for pagination
+            url.set_query(Some(&format!("currency={}&page={}", currency, page)));
+
+            let mut json: Value = self
+                .client
+                .get(url.clone())
+                .header("Authorization", format!("Token {}", self.api_key))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+
+            if let Some(transactions) = json["transactions"].take().as_array_mut() {
+                if transactions.is_empty() {
+                    break; // No more data
+                }
+
+                let count = transactions.len();
+                all_transactions.append(transactions);
+
+                // If we received fewer than the default 50, we've hit the last page
+                if count < 50 {
+                    break;
+                }
+                page += 1;
+            } else {
+                break; // Handle unexpected JSON structure
+            }
+        }
+
+        all_transactions
     }
 }
 
-async fn fetch_transactions(client: &reqwest::Client, api_key: &str, currency: &str) -> Value {
-    // Example API Call using the Nobitex USDT endpoint
-    const BASE_URL: &str = r"https://apiv2.nobitex.ir/users/transactions-history";
+// Helper struct for sorting and merging
+#[derive(Debug, Clone)]
+struct RawTx {
+    time: DateTime<Utc>,
+    currency: String,
+    balance: f64,
+    description: String,
+}
 
-    let mut url = reqwest::Url::parse(BASE_URL).expect("failed to parse url");
-    url.set_query(Some(&format!("currency={currency}")));
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn_local<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    // On native, spin up a background thread and a lightweight Tokio runtime
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
 
-    let mut json: serde_json::Value = client
-        .get(url.clone())
-        .header("Authorization", format!("Token {}", api_key))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+        rt.block_on(future);
+    });
+}
 
-    log::info!("{url}: {json:#}");
-
-    json["transactions"].take()
+#[cfg(target_arch = "wasm32")]
+pub fn spawn_local<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + 'static,
+{
+    // On web, give the async task to the JavaScript event loop
+    wasm_bindgen_futures::spawn_local(future);
 }

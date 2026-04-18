@@ -49,12 +49,14 @@ fn main() -> eframe::Result<()> {
     log::info!("Starting HolonApp...");
 
     // 2. Setup communication channel between Tokio and egui
-    let (tx, rx) = mpsc::channel::<Allocation>();
+    let (tx, rx) = mpsc::channel::<BackendEvent>();
 
-    // 3. Spawn Tokio runtime in a background thread
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(fetch_nobitex_data(tx));
+        let backend = NetworkBackend::new(tx);
+
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async { tokio::join!(backend.fetch_nobitex_data()) });
     });
 
     // 4. Start the native UI
