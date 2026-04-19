@@ -6,6 +6,7 @@ use crate::{
 };
 use async_stream::stream;
 use futures::Stream;
+use futures::StreamExt;
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -41,26 +42,38 @@ impl NetworkBackend {
     }
 
     pub async fn fetch_trajectory(&self) {
-        let query = [("srcCurrency", "usdt"), ("dstCurrency", "rls")];
+        let query = serde_json::json!({
+            "srcCurrency": "usdt",
+            "dstCurrency": "rls",
+        });
 
-        let all_trades = self.fetch_paginated("market/trades/list", query).await;
+        // Pass "trades" as the key
+        let mut trade_stream =
+            self.fetch_paginated_stream::<models::Trade, _>("market/trades/list", &query, "trades");
 
-        let trajectory = all_trades
-            .into_iter()
-            .map(models::Trade::into_trade)
-            .collect();
+        let mut trajectory = Vec::new();
+        while let Some(trade) = trade_stream.next() {
+            trajectory.push(models::Trade::into_trade(trade));
+        }
 
         self.send_event(BackendEvent::FetchedTrades { trajectory });
     }
 
     pub async fn fetch_orders(&self) {
-        let query = [
-            ("srcCurrency", "usdt"),
-            ("dstCurrency", "rls"),
-            ("status", "active"),
-        ];
+        let query = serde_json::json!({
+            "srcCurrency": "usdt",
+            "dstCurrency": "rls",
+            "status": "active",
+        });
 
-        let orders = self.fetch_paginated("market/orders/list", query).await;
+        // Pass "orders" as the key
+        let mut order_stream =
+            self.fetch_paginated_stream::<models::Order, _>("market/orders/list", &query, "orders");
+
+        let mut orders = Vec::new();
+        while let Some(order) = order_stream.next().await {
+            orders.push(order);
+        }
 
         self.send_event(BackendEvent::FetchedOrders { orders });
     }
