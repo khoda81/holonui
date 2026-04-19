@@ -1,7 +1,7 @@
 mod models;
 
+use crate::app::backend::models::{ApiFailure, ApiResponse};
 use crate::utils::sleep_async;
-use chrono::Utc;
 use models::{OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
@@ -23,13 +23,11 @@ pub enum FetchError {
     Request(reqwest::Error),
 
     #[error("API error ({code}): {message}")]
-    APIError { message: String, code: String },
-
-    #[error("Rate limit reached: {message}")]
-    RateLimit {
+    APIError {
         message: String,
-        backoff: chrono::DateTime<Utc>,
-        limit: u32,
+        code: String,
+        #[source]
+        error: ApiFailure,
     },
 
     #[error("Failed to read response: {0}")]
@@ -152,12 +150,31 @@ impl NetworkBackend {
                 .query(query)
                 .header("Authorization", format!("Token {}", self.api_key));
 
-            match self.send_request(request).await {
+            let err = match self.send_request(request).await {
                 Ok(res) => {
                     log::debug!("Fetched successfully: `{}`", url.path());
                     return res;
                 }
-                Err(err) => log::error!("Error fetching `{}`: {err}", url.path()),
+
+                Err(err) => err,
+            };
+
+            match err {
+                FetchError::APIError {
+                    message,
+                    error: ApiFailure::RateLimit { backoff, .. },
+                    ..
+                } => {
+                    log::warn!("API limit reached for {}: {message}", url.path());
+                    sleep_async(Duration::from_secs(backoff + 1)).await;
+                    continue;
+                }
+
+                FetchError::APIError { message, code, .. } => {
+                    log::error!("API error fetching `{}` ({code}): {message}", url.path());
+                }
+
+                err => log::error!("Error fetching `{}`: {err}", url.path()),
             }
 
             // TODO: This should be a parameter/constant
@@ -169,11 +186,6 @@ impl NetworkBackend {
     where
         T: DeserializeOwned,
     {
-        // TODO: Add parsing for known failure messages: {"status": "failed", "message": "\u062a\u0639\u062f\u0627\u062f \u062f\u0631\u062e\u0648\u0627\u0633\u062a \u0634\u0645\u0627 \u0628\u06cc\u0634 \u0627\u0632 \u062d\u062f \u0645\u0639\u0645\u0648\u0644 \u062a\u0634\u062e\u06cc\u0635 \u062f\u0627\u062f\u0647 \u0634\u062f\u0647. \u0644\u0637\u0641\u0627 0 \u062b\u0627\u0646\u06cc\u0647 \u0635\u0628\u0631 \u0646\u0645\u0627\u06cc\u06cc\u062f.", "code": "TooManyRequests", "backOff": 0, "limit": 30}
-        //       Where the api is telling us that it has failed, we should print the message.
-
-        // TODO: Add a custom error type for rate limits so that the retry loop can wait for exactly that duration instead of retrying blindly
-
         let raw_text = request
             .send()
             .await
@@ -182,7 +194,22 @@ impl NetworkBackend {
             .await
             .map_err(FetchError::Read)?;
 
-        serde_json::from_str(&raw_text).map_err(|err| FetchError::Parse(err, raw_text))
+        let response: ApiResponse<T> =
+            serde_json::from_str(&raw_text).map_err(|err| FetchError::Parse(err, raw_text))?;
+
+        match response {
+            ApiResponse::Ok(data) => Ok(data),
+
+            ApiResponse::Failed {
+                message,
+                error,
+                code,
+            } => Err(FetchError::APIError {
+                message,
+                error,
+                code,
+            }),
+        }
     }
 
     fn send_event(&self, event: BackendEvent) {

@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+use thiserror::Error;
 
 // Helper function to deserialize stringified numbers into f64
 fn f64_from_str<'de, D>(deserializer: D) -> Result<f64, D::Error>
@@ -8,6 +10,36 @@ where
 {
     let s = String::deserialize(deserializer)?;
     s.parse().map_err(serde::de::Error::custom)
+}
+
+#[derive(Deserialize, Error, Debug)]
+#[serde(untagged)]
+pub enum ApiFailure {
+    #[error("Rate limit reached until {backoff} seconds (limit: {limit})")]
+    RateLimit {
+        #[serde(rename = "backOff")]
+        backoff: u64,
+        limit: u32,
+    },
+
+    #[error("API error: {0}")]
+    Other(Value),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "status")]
+pub enum ApiResponse<T> {
+    #[serde(rename = "ok")]
+    Ok(T),
+
+    #[serde(rename = "failed")]
+    Failed {
+        message: String,
+        code: String,
+
+        #[serde(flatten)]
+        error: ApiFailure,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
