@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 // Helper function to deserialize stringified numbers into f64
 fn f64_from_str<'de, D>(deserializer: D) -> Result<f64, D::Error>
@@ -10,14 +10,14 @@ where
     s.parse().map_err(serde::de::Error::custom)
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TradesResponse {
     pub trades: Vec<Trade>,
     #[serde(rename = "hasNext")]
     pub has_next: bool,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Trade {
     #[serde(rename = "type")]
     pub trade_type: TradeType,
@@ -44,21 +44,45 @@ impl Trade {
     }
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum TradeType {
     Buy,
     Sell,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WalletsResponse {
     pub wallets: Vec<Wallet>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Wallet {
     pub currency: String,
     #[serde(deserialize_with = "f64_from_str")]
     pub balance: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OrderListResponse {
+    pub status: String,
+    pub orders: Vec<Order>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Order {
+    pub id: u64,
+    #[serde(rename = "type")]
+    pub order_type: String, // e.g., "sell", "buy"
+    pub execution: String, // e.g., "Limit", "Market"
+    pub status: String,    // e.g., "Active"
+    pub src_currency: String,
+    pub dst_currency: String,
+    pub price: String,
+    pub amount: String,
+    pub matched_amount: String,
+    pub average_price: String,
+    pub fee: String,
+    pub client_order_id: Option<String>,
 }
