@@ -67,6 +67,8 @@ pub struct Wallet {
 pub struct OrderListResponse {
     pub status: String,
     pub orders: Vec<Order>,
+    #[serde(rename = "hasNext")]
+    pub has_next: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -74,15 +76,34 @@ pub struct OrderListResponse {
 pub struct Order {
     pub id: u64,
     #[serde(rename = "type")]
-    pub order_type: String, // e.g., "sell", "buy"
-    pub execution: String, // e.g., "Limit", "Market"
-    pub status: String,    // e.g., "Active"
-    pub src_currency: String,
-    pub dst_currency: String,
-    pub price: String,
-    pub amount: String,
-    pub matched_amount: String,
-    pub average_price: String,
-    pub fee: String,
-    pub client_order_id: Option<String>,
+    pub order_type: OrderType,
+    #[serde(deserialize_with = "f64_from_str")]
+    pub price: f64,
+    #[serde(deserialize_with = "f64_from_str")]
+    pub amount: f64,
+    #[serde(deserialize_with = "f64_from_str")]
+    pub unmatched_amount: f64,
+    pub status: OrderStatus,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OrderType {
+    Buy,
+    Sell,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum OrderStatus {
+    Active,
+    Open,
+    Done,
+    Close,
+    Canceled,
+    #[serde(other)]
+    Unknown,
 }
