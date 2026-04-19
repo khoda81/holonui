@@ -171,6 +171,8 @@ impl HolonApp {
                 .color(anchor_color),
         );
 
+        // TODO: Draw the order line allocation, they should have a different color gradient but use the same time unit
+
         if let AppMode::Default = self.mode {
             return;
         }
