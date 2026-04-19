@@ -104,6 +104,7 @@ pub enum OrderStatus {
     Done,
     Close,
     Canceled,
+    // TODO: Can we store the unmatched value for better error handling?
     #[serde(other)]
     Unknown,
 }
