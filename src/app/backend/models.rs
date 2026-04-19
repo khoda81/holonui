@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -13,19 +11,10 @@ where
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Paginated<T> {
+pub struct TradesPage {
+    pub trades: Vec<Trade>,
     #[serde(rename = "hasNext")]
     pub has_next: bool,
-    pub status: Option<String>,
-    #[serde(flatten)]
-    pub data: HashMap<String, Vec<T>>,
-}
-
-impl<T> Paginated<T> {
-    /// Extracts the items regardless of what the JSON key was
-    pub fn into_items(self) -> Vec<T> {
-        self.data.into_values().next().unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -43,15 +32,15 @@ pub struct Trade {
 }
 
 impl Trade {
-    pub fn into_trade(trade: Self) -> crate::app::Trade {
-        let delta = match trade.trade_type {
-            TradeType::Buy => [-(trade.amount - trade.fee), trade.total],
-            TradeType::Sell => [trade.amount, -(trade.total - trade.fee)],
+    pub fn into_trade(self) -> crate::app::Trade {
+        let delta = match self.trade_type {
+            TradeType::Buy => [-(self.amount - self.fee), self.total],
+            TradeType::Sell => [self.amount, -(self.total - self.fee)],
         };
 
         crate::app::Trade {
             delta,
-            timestamp: trade.timestamp,
+            timestamp: self.timestamp,
         }
     }
 }
@@ -75,40 +64,37 @@ pub struct Wallet {
     pub balance: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Order {
-    pub id: u64,
     #[serde(rename = "type")]
-    pub order_type: OrderType,
+    pub order_type: TradeType,
     #[serde(deserialize_with = "f64_from_str")]
     pub price: f64,
     #[serde(deserialize_with = "f64_from_str")]
     pub amount: f64,
-    #[serde(deserialize_with = "f64_from_str")]
+    #[serde(rename = "unmatchedAmount", deserialize_with = "f64_from_str")]
     pub unmatched_amount: f64,
-    pub status: OrderStatus,
+    #[serde(rename = "created_at")]
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum OrderType {
-    Buy,
-    Sell,
-    #[serde(other)]
-    Unknown,
+impl Order {
+    pub fn into_order(self) -> crate::app::Order {
+        let delta = match self.order_type {
+            TradeType::Buy => [-(self.amount), todo!()],
+            TradeType::Sell => [self.amount, todo!()],
+        };
+
+        crate::app::Order {
+            delta,
+            created_at: self.created_at,
+        }
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "PascalCase")]
-pub enum OrderStatus {
-    Active,
-    Open,
-    Done,
-    Close,
-    Canceled,
-    // TODO: Can we store the unmatched value for better error handling?
-    #[serde(other)]
-    Unknown,
+#[derive(Debug, Deserialize, Clone)]
+pub struct OrderPage {
+    pub orders: Vec<Order>,
+    #[serde(rename = "hasNext")]
+    pub has_next: bool,
 }

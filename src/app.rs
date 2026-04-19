@@ -32,8 +32,14 @@ struct Trade {
     timestamp: DateTime<Utc>,
 }
 
+struct Order {
+    delta: [f64; 2],
+    created_at: DateTime<Utc>,
+}
+
 pub struct HolonApp {
     trajectory: Vec<Trade>,
+    orders: Vec<Order>,
     anchor: Allocation,
     mode: AppMode,
     api_receiver: Receiver<BackendEvent>,
@@ -60,12 +66,14 @@ impl HolonApp {
         spawn_local(async move {
             futures::join!(
                 network_backend.fetch_balances(),
-                network_backend.fetch_trajectory()
+                network_backend.fetch_trajectory(),
+                network_backend.fetch_orders(),
             );
         });
 
         Self {
             mode: AppMode::Default,
+            orders: vec![],
             trajectory: vec![],
             anchor: [0.0, 0.0],
             api_receiver: rx,
@@ -76,11 +84,10 @@ impl HolonApp {
     pub fn update(&mut self) {
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
-                BackendEvent::FetchedBalances { anchor } => self.anchor = anchor,
+                BackendEvent::FetchedOrders { orders } => self.orders = orders,
                 BackendEvent::FetchedTrades { trajectory } => self.trajectory = trajectory,
-                BackendEvent::RequestError(err) => {
-                    log::error!("Request Error: {err}")
-                }
+                BackendEvent::FetchedBalances { anchor } => self.anchor = anchor,
+                BackendEvent::RequestError(err) => log::error!("Request Error: {err}"),
             }
         }
     }
