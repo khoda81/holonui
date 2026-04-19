@@ -1,19 +1,32 @@
 mod models;
 
-use crate::app::backend::models::{OrderPage, TradesPage};
-use crate::{app::backend::models::WalletsResponse, utils::sleep_async};
+use crate::utils::sleep_async;
+use models::{OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::{sync::mpsc::Sender, time::Duration};
+use thiserror::Error;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
 
 pub enum BackendEvent {
-    FetchedTrades { trajectory: Vec<super::Trade> },
-    FetchedBalances { anchor: super::Allocation },
-    FetchedOrders { orders: Vec<super::Order> },
-    RequestError(reqwest::Error),
+    Trades { trajectory: Vec<super::Trade> },
+    Balances { anchor: super::Allocation },
+    Orders { orders: Vec<super::Order> },
+}
+
+// TODO: We should probably keep the url and request parameters here too for better erroring
+#[derive(Error, Debug)]
+pub enum FetchError {
+    #[error("Request failed: {0}")]
+    Request(reqwest::Error),
+
+    #[error("Failed to read response: {0}")]
+    Read(reqwest::Error),
+
+    #[error("Failed to parse JSON: {0}\nRaw JSON: {1}")]
+    Parse(serde_json::Error, String),
 }
 
 pub struct NetworkBackend {
@@ -21,7 +34,7 @@ pub struct NetworkBackend {
     ctx: egui::Context,
     client: reqwest::Client,
     api_key: String,
-    base_url: reqwest::Url, // Store parsed URL here
+    base_url: reqwest::Url,
 }
 
 impl NetworkBackend {
@@ -31,21 +44,18 @@ impl NetworkBackend {
             ctx,
             client: reqwest::Client::new(),
             api_key: std::env::var("NOBITEX_API_KEY").unwrap_or_default(),
-            // Parse once during initialization
             base_url: reqwest::Url::parse(BASE_URL).unwrap(),
         }
     }
 
     pub async fn fetch_trajectory(&self) {
         let mut query = HashMap::new();
-
         query.insert("srcCurrency", "usdt".to_string());
         query.insert("dstCurrency", "rls".to_string());
 
         let mut trajectory = Vec::new();
         for page in 1.. {
             query.insert("page", page.to_string());
-
             let page: TradesPage = self.fetch_endpoint("market/trades/list", &query).await;
 
             trajectory.extend(page.trades.into_iter().map(models::Trade::into_trade));
@@ -55,12 +65,11 @@ impl NetworkBackend {
             }
         }
 
-        self.send_event(BackendEvent::FetchedTrades { trajectory });
+        self.send_event(BackendEvent::Trades { trajectory });
     }
 
     pub async fn fetch_orders(&self) {
         let mut orders = Vec::new();
-
         let mut query = HashMap::new();
 
         query.insert("srcCurrency", "usdt".to_string());
@@ -77,11 +86,10 @@ impl NetworkBackend {
             }
         }
 
-        self.send_event(BackendEvent::FetchedOrders { orders })
+        self.send_event(BackendEvent::Orders { orders })
     }
 
     pub async fn fetch_balances(&self) {
-        // No query parameters needed here, so we pass an empty array
         let response: WalletsResponse = self
             .fetch_endpoint("users/wallets/list", &[] as &[(&str, &str)])
             .await;
@@ -97,11 +105,11 @@ impl NetworkBackend {
             }
         }
 
-        self.send_event(BackendEvent::FetchedBalances {
+        self.send_event(BackendEvent::Balances {
             anchor: [current_usdt, current_rls],
         });
     }
-    /// Base method that hits the endpoint, handles the URL joining, query parameters, and retries.
+
     async fn fetch_endpoint<T, Q>(&self, endpoint: &str, query: &Q) -> T
     where
         T: DeserializeOwned,
@@ -113,52 +121,39 @@ impl NetworkBackend {
             .expect("Invalid hardcoded endpoint");
 
         loop {
-            log::trace!("Sending request for: {}", url.clone());
+            log::trace!("Sending request for: {}", url);
 
-            // 1. Fetch the raw response
-            let response = match self
+            let request = self
                 .client
                 .get(url.clone())
                 .query(query)
-                .header("Authorization", format!("Token {}", self.api_key))
-                .send()
-                .await
-            {
-                Ok(resp) => resp,
-                Err(err) => {
-                    log::error!("Network Error: {err}");
-                    // Assuming RequestError takes the reqwest::Error or a String
-                    // Adjust this if your BackendEvent expects a different type
-                    self.send_event(BackendEvent::RequestError(err));
-                    sleep_async(Duration::from_secs(3)).await;
-                    continue;
-                }
-            };
+                .header("Authorization", format!("Token {}", self.api_key));
 
-            // 2. Extract the raw text body
-            let raw_text = match response.text().await {
-                Ok(text) => text,
-                Err(err) => {
-                    log::error!("Failed to read response text: {err}");
-                    sleep_async(Duration::from_secs(3)).await;
-                    continue;
+            match self.send_request(request).await {
+                Ok(res) => {
+                    log::debug!("Fetched successfully: `{}`", url.path());
+                    return res;
                 }
-            };
-
-            // 3. Attempt to deserialize, logging the raw text on failure
-            match serde_json::from_str::<T>(&raw_text) {
-                Ok(parsed) => break parsed,
-                Err(parse_err) => {
-                    log::error!(
-                        "JSON Parse Error for {}:\nError: {parse_err}\nRaw Payload: {raw_text}",
-                        url.path(),
-                    );
-                }
+                Err(err) => log::error!("{err}"),
             }
 
-            // We wait and retry. You can also send a custom BackendEvent here if needed.
             sleep_async(Duration::from_secs(3)).await;
         }
+    }
+
+    async fn send_request<T>(&self, request: reqwest::RequestBuilder) -> Result<T, FetchError>
+    where
+        T: DeserializeOwned,
+    {
+        let raw_text = request
+            .send()
+            .await
+            .map_err(FetchError::Request)?
+            .text()
+            .await
+            .map_err(FetchError::Read)?;
+
+        serde_json::from_str::<T>(&raw_text).map_err(|err| FetchError::Parse(err, raw_text))
     }
 
     fn send_event(&self, event: BackendEvent) {

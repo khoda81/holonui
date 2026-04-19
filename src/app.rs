@@ -75,10 +75,9 @@ impl HolonApp {
     pub fn update(&mut self) {
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
-                BackendEvent::FetchedOrders { orders } => self.orders = orders,
-                BackendEvent::FetchedTrades { trajectory } => self.trajectory = trajectory,
-                BackendEvent::FetchedBalances { anchor } => self.anchor = anchor,
-                BackendEvent::RequestError(err) => log::error!("Request Error: {err}"),
+                BackendEvent::Orders { orders } => self.orders = orders,
+                BackendEvent::Trades { trajectory } => self.trajectory = trajectory,
+                BackendEvent::Balances { anchor } => self.anchor = anchor,
             }
         }
     }
