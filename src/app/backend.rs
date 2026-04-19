@@ -1,12 +1,15 @@
 mod models;
 
 use crate::{
-    app::backend::models::{OrderListResponse, TradesResponse, WalletsResponse},
+    app::backend::models::{Paginated, WalletsResponse},
     utils::sleep_async,
 };
+use async_stream::stream;
+use futures::Stream;
 use reqwest::Url;
 use serde::de::DeserializeOwned;
-use std::{str::FromStr, sync::mpsc::Sender, time::Duration};
+use serde_json::Value;
+use std::{sync::mpsc::Sender, time::Duration};
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
 
@@ -40,11 +43,7 @@ impl NetworkBackend {
     pub async fn fetch_trajectory(&self) {
         let query = [("srcCurrency", "usdt"), ("dstCurrency", "rls")];
 
-        let all_trades = self
-            .fetch_paginated("market/trades/list", &query, |res: TradesResponse| {
-                (res.trades, res.has_next)
-            })
-            .await;
+        let all_trades = self.fetch_paginated("market/trades/list", query).await;
 
         let trajectory = all_trades
             .into_iter()
@@ -61,11 +60,7 @@ impl NetworkBackend {
             ("status", "active"),
         ];
 
-        let orders = self
-            .fetch_paginated("market/orders/list", &query, |res: OrderListResponse| {
-                (res.orders, res.has_next)
-            })
-            .await;
+        let orders = self.fetch_paginated("market/orders/list", query).await;
 
         self.send_event(BackendEvent::FetchedOrders { orders });
     }
@@ -92,54 +87,91 @@ impl NetworkBackend {
         });
     }
 
-    /// Generic helper for fetching all pages of an endpoint
-    async fn fetch_paginated<T, R, F>(
+    pub fn fetch_paginated_stream<'a, T, Q>(
+        &'a self,
+        endpoint: &'a str,
+        query: &'a Q,
+        list_key: &'a str, // Pass "orders" or "trades" here
+    ) -> impl Stream<Item = T> + 'a
+    where
+        T: DeserializeOwned + 'a,
+        Q: serde::Serialize + ?Sized,
+    {
+        stream! {
+            let mut page_num = 1;
+
+            loop {
+                // Convert the base query into a Value so we can append the `page` parameter dynamically
+                let mut current_query = serde_json::to_value(query).unwrap_or(serde_json::json!({}));
+                current_query["page"] = Value::from(page_num);
+
+                // Fetch the page as an untyped JSON Value
+                let response: Value = self.fetch_endpoint(endpoint, &current_query).await;
+
+                // Extract `hasNext`
+                let has_next = response
+                    .get("hasNext")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                // Dynamically extract the specific list by name and deserialize it into T
+                let items: Vec<T> = if let Some(list) = response.get(list_key) {
+                    serde_json::from_value(list.clone()).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
+                // Yield items into the stream
+                for item in items {
+                    yield item;
+                }
+
+                if !has_next {
+                    break;
+                }
+
+                page_num += 1;
+            }
+        }
+    }
+
+    async fn fetch_paginated<T>(
         &self,
         endpoint: &str,
-        base_query: &[(&str, &str)],
-        extract: F,
-    ) -> Vec<R>
+        query: impl IntoIterator<Item = (&str, &str)>,
+    ) -> Vec<T>
     where
         T: DeserializeOwned,
-        F: Fn(T) -> (Vec<R>, bool), // Extracts (items, has_next) from the response payload
     {
         let mut all_items = Vec::new();
+        let mut params = Vec::from_iter(query);
+        let mut page_str = page.to_string();
 
         for page in 1.. {
-            let page_str = page.to_string();
+            params.push(("page", &page_str));
 
-            // Build the query for the current page
-            let mut current_query = base_query.to_vec();
-            current_query.push(("page", &page_str));
-            current_query.push(("pageSize", "100"));
+            // Fetch the page generically
+            let page: Paginated<T> = self.fetch_endpoint(endpoint, &params).await;
+            params.pop();
 
-            let response: T = self.fetch_endpoint(endpoint, &current_query).await;
-            let (items, has_next) = extract(response);
-
-            all_items.extend(items);
+            let has_next = page.has_next;
+            // Moves items into all_items efficiently (leaves page.items empty)
+            all_items.extend(page.into_items());
 
             if !has_next {
-                log::trace!(
-                    "Fetched {} items across {} pages from {}",
-                    all_items.len(),
-                    page,
-                    endpoint
-                );
                 break;
             }
-
-            sleep_async(Duration::from_millis(200)).await;
         }
 
         all_items
     }
 
     /// Base method that hits the endpoint, handles the URL joining, query parameters, and retries.
-    async fn fetch_endpoint<T: DeserializeOwned, Q: serde::Serialize + ?Sized>(
-        &self,
-        endpoint: &str,
-        query: &Q,
-    ) -> T {
+    async fn fetch_endpoint<T, Q>(&self, endpoint: &str, query: &Q) -> T
+    where
+        T: DeserializeOwned,
+        Q: serde::Serialize + ?Sized,
+    {
         let url: Url = self
             .base_url
             .join(endpoint)

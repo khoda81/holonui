@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -11,14 +13,24 @@ where
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TradesResponse {
-    pub trades: Vec<Trade>,
+pub struct Paginated<T> {
     #[serde(rename = "hasNext")]
     pub has_next: bool,
+    pub status: Option<String>,
+    #[serde(flatten)]
+    pub data: HashMap<String, Vec<T>>,
+}
+
+impl<T> Paginated<T> {
+    /// Extracts the items regardless of what the JSON key was
+    pub fn into_items(self) -> Vec<T> {
+        self.data.into_values().next().unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Trade {
+    pub id: u64,
     #[serde(rename = "type")]
     pub trade_type: TradeType,
     #[serde(deserialize_with = "f64_from_str")]
@@ -61,14 +73,6 @@ pub struct Wallet {
     pub currency: String,
     #[serde(deserialize_with = "f64_from_str")]
     pub balance: f64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct OrderListResponse {
-    pub status: String,
-    pub orders: Vec<Order>,
-    #[serde(rename = "hasNext")]
-    pub has_next: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
