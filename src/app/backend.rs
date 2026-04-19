@@ -108,6 +108,8 @@ impl NetworkBackend {
             .expect("Invalid hardcoded endpoint");
 
         loop {
+            log::trace!("Sending request for: {}", url.clone());
+
             let result = async {
                 self.client
                     .get(url.clone())

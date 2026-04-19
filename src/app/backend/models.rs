@@ -70,8 +70,6 @@ pub struct Order {
     pub order_type: TradeType,
     #[serde(deserialize_with = "f64_from_str")]
     pub price: f64,
-    #[serde(deserialize_with = "f64_from_str")]
-    pub amount: f64,
     #[serde(rename = "unmatchedAmount", deserialize_with = "f64_from_str")]
     pub unmatched_amount: f64,
     #[serde(rename = "created_at")]
@@ -80,9 +78,12 @@ pub struct Order {
 
 impl Order {
     pub fn into_order(self) -> crate::app::Order {
+        // TODO: Apply a fee to the price, these prices are not the actual executed price
+        let total = self.unmatched_amount * self.price;
+
         let delta = match self.order_type {
-            TradeType::Buy => [-(self.amount), todo!()],
-            TradeType::Sell => [self.amount, todo!()],
+            TradeType::Buy => [-self.unmatched_amount, total],
+            TradeType::Sell => [self.unmatched_amount, -total],
         };
 
         crate::app::Order {

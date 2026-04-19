@@ -47,15 +47,6 @@ pub struct HolonApp {
     time_unit_sec: f64,
 }
 
-fn get_color_rgba(t: f32) -> egui::Color32 {
-    const START_COLOR: Rgba = Rgba::from_rgb(0.057805434, 0.000303527, 0.088655606); // Dark purple
-    const END_COLOR: Rgba = Rgba::from_rgb(0.9822506, 0.79910284, 0.018500218); // Yellow
-
-    let mixed_rgba = egui::lerp(START_COLOR..=END_COLOR, t);
-
-    egui::Color32::from(mixed_rgba)
-}
-
 impl HolonApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -133,6 +124,9 @@ impl HolonApp {
 
         let now = Utc::now();
 
+        const START_COLOR: Rgba = Rgba::from_rgb(0.057805434, 0.000303527, 0.088655606); // Dark purple
+        const END_COLOR: Rgba = Rgba::from_rgb(0.9822506, 0.79910284, 0.018500218); // Yellow
+
         // Convert the time unit into milliseconds for calculation
         for Trade { delta, timestamp } in self.trajectory.iter() {
             let elapsed = now - *timestamp;
@@ -148,7 +142,8 @@ impl HolonApp {
             let delta_t = elapsed_s / self.time_unit_sec;
             let weight = (-delta_t as f32).exp(); // e^(-t), a value between 0.0 and 1.0
 
-            let color = get_color_rgba(weight);
+            let mixed_rgba = egui::lerp(START_COLOR..=END_COLOR, weight);
+            let color = egui::Color32::from(mixed_rgba);
 
             let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
             let segment = Line::new(
@@ -163,15 +158,42 @@ impl HolonApp {
             absolute_points.push(current_point);
         }
 
-        let anchor_color = get_color_rgba(1.0);
-
         ui.points(
             egui_plot::Points::new("Anchor (Current Balance)", vec![self.anchor])
                 .radius(5.0)
-                .color(anchor_color),
+                .color(END_COLOR),
         );
 
-        // TODO: Draw the order line allocation, they should have a different color gradient but use the same time unit
+        // Draw the order line allocation
+        for Order { delta, created_at } in self.orders.iter() {
+            let elapsed = now - *created_at;
+            let mut elapsed_s = elapsed.as_seconds_f64();
+
+            if elapsed_s < 0.0 {
+                elapsed_s = 0.0;
+            }
+
+            let delta_t = elapsed_s / self.time_unit_sec;
+            let weight = (-delta_t as f32).exp();
+
+            // Distinct color gradient for orders (e.g., Deep Blue to Cyan)
+            const START_COLOR: Rgba = Rgba::from_rgb(0.01, 0.1, 0.4);
+            const END_COLOR: Rgba = Rgba::from_rgb(0.2, 0.8, 0.9);
+
+            let color = egui::Color32::from(egui::lerp(START_COLOR..=END_COLOR, weight));
+
+            // Orders project out from the current anchor point
+            let next_point = [self.anchor[0] + delta[0], self.anchor[1] + delta[1]];
+
+            let segment = Line::new(
+                "Active Order",
+                PlotPoints::new(vec![self.anchor, next_point]),
+            )
+            .color(color)
+            .style(egui_plot::LineStyle::Dashed { length: 4.0 }); // Dashed to show it's pending
+
+            ui.line(segment);
+        }
 
         if let AppMode::Default = self.mode {
             return;
