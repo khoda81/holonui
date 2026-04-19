@@ -14,10 +14,9 @@ const BASE_URL: &str = "https://apiv2.nobitex.ir";
 pub enum BackendEvent {
     Trades { trajectory: Vec<super::Trade> },
     Balances { anchor: super::Allocation },
-    Orders { orders: Vec<super::Order> },
+    Orders(super::Orders),
 }
 
-// TODO: We should probably keep the url and request parameters here too for better erroring
 #[derive(Error, Debug)]
 pub enum FetchError {
     #[error("Request failed: {0}")]
@@ -69,7 +68,7 @@ impl NetworkBackend {
             query.insert("page", page.to_string());
             let page: TradesPage = self.fetch_endpoint("market/trades/list", &query).await;
 
-            trajectory.extend(page.trades.into_iter().map(models::Trade::into_trade));
+            trajectory.extend(page.trades.into_iter().map(Into::into));
 
             if !page.has_next {
                 break;
@@ -80,7 +79,8 @@ impl NetworkBackend {
     }
 
     pub async fn fetch_orders(&self) {
-        let mut orders = Vec::new();
+        let mut bids = Vec::new();
+        let mut asks = Vec::new();
         let mut query = HashMap::new();
 
         query.insert("srcCurrency", "usdt".to_string());
@@ -91,13 +91,25 @@ impl NetworkBackend {
             query.insert("page", page.to_string());
             let page: OrderPage = self.fetch_endpoint("market/orders/list", &query).await;
 
-            orders.extend(page.orders.into_iter().map(models::Order::into_order));
+            for order in page.orders {
+                match order.order_type {
+                    models::TradeType::Buy => bids.push(order),
+                    models::TradeType::Sell => asks.push(order),
+                }
+            }
+
             if !page.has_next {
                 break;
             }
         }
 
-        self.send_event(BackendEvent::Orders { orders })
+        bids.sort_by(|a, b| b.price.total_cmp(&a.price)); // descending
+        asks.sort_by(|a, b| a.price.total_cmp(&b.price)); // ascending
+
+        self.send_event(BackendEvent::Orders(super::Orders {
+            bids: bids.into_iter().map(Into::into).collect(),
+            asks: asks.into_iter().map(Into::into).collect(),
+        }))
     }
 
     pub async fn fetch_balances(&self) {

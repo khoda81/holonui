@@ -31,16 +31,16 @@ pub struct Trade {
     pub timestamp: DateTime<Utc>, // Chrono handles the parsing automatically
 }
 
-impl Trade {
-    pub fn into_trade(self) -> crate::app::Trade {
-        let delta = match self.trade_type {
-            TradeType::Buy => [-(self.amount - self.fee), self.total],
-            TradeType::Sell => [self.amount, -(self.total - self.fee)],
+impl From<Trade> for crate::app::Trade {
+    fn from(value: Trade) -> Self {
+        let delta = match value.trade_type {
+            TradeType::Buy => [-(value.amount - value.fee), value.total],
+            TradeType::Sell => [value.amount, -(value.total - value.fee)],
         };
 
         crate::app::Trade {
             delta,
-            timestamp: self.timestamp,
+            timestamp: value.timestamp,
         }
     }
 }
@@ -83,19 +83,19 @@ pub struct Order {
     pub created_at: DateTime<Utc>,
 }
 
-impl Order {
-    pub fn into_order(self) -> crate::app::Order {
+impl From<Order> for crate::app::Order {
+    fn from(value: Order) -> Self {
         // TODO: Apply a fee to the price, these prices are not the actual executed price
-        let total = self.unmatched_amount * self.price;
+        let total = value.unmatched_amount * value.price;
 
-        let delta = match self.order_type {
-            TradeType::Buy => [-self.unmatched_amount, total],
-            TradeType::Sell => [self.unmatched_amount, -total],
+        let delta = match value.order_type {
+            TradeType::Buy => [-value.unmatched_amount, total],
+            TradeType::Sell => [value.unmatched_amount, -total],
         };
 
         crate::app::Order {
             delta,
-            created_at: self.created_at,
+            created_at: value.created_at,
         }
     }
 }

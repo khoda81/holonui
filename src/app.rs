@@ -37,9 +37,14 @@ struct Order {
     created_at: DateTime<Utc>,
 }
 
+struct Orders {
+    bids: Vec<Order>,
+    asks: Vec<Order>,
+}
+
 pub struct HolonApp {
     trajectory: Vec<Trade>,
-    orders: Vec<Order>,
+    orders: Orders,
     anchor: Allocation,
     mode: AppMode,
     api_receiver: Receiver<BackendEvent>,
@@ -64,7 +69,10 @@ impl HolonApp {
 
         Self {
             mode: AppMode::Default,
-            orders: vec![],
+            orders: Orders {
+                bids: vec![],
+                asks: vec![],
+            },
             trajectory: vec![],
             anchor: [0.0, 0.0],
             api_receiver: rx,
@@ -75,7 +83,7 @@ impl HolonApp {
     pub fn update(&mut self) {
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
-                BackendEvent::Orders { orders } => self.orders = orders,
+                BackendEvent::Orders(orders) => self.orders = orders,
                 BackendEvent::Trades { trajectory } => self.trajectory = trajectory,
                 BackendEvent::Balances { anchor } => self.anchor = anchor,
             }
@@ -163,34 +171,55 @@ impl HolonApp {
                 .color(END_COLOR),
         );
 
-        // TODO: We should sort orders by price and group them by sell/buy and draw two lines going out from the anchor instead
-        for Order { delta, created_at } in self.orders.iter() {
-            let elapsed = now - *created_at;
-            let mut elapsed_s = elapsed.as_seconds_f64();
+        // Buy arm: cumulative sum arcs from anchor
+        let mut buy_point = self.anchor;
+        for order in &self.orders.bids {
+            let elapsed_s = (now - order.created_at)
+                .max(chrono::Duration::zero())
+                .as_seconds_f64();
+            let weight = (-(elapsed_s / self.time_unit_sec) as f32).exp();
 
-            if elapsed_s < 0.0 {
-                elapsed_s = 0.0;
-            }
-
-            let delta_t = elapsed_s / self.time_unit_sec;
-            let weight = (-delta_t as f32).exp();
-
-            const START_COLOR: Rgba = Rgba::from_rgb(0.01, 0.1, 0.4);
-            const END_COLOR: Rgba = Rgba::from_rgb(0.2, 0.8, 0.9);
-
+            const START_COLOR: Rgba = Rgba::from_rgb(0.01, 0.4, 0.1);
+            const END_COLOR: Rgba = Rgba::from_rgb(0.2, 0.9, 0.8);
             let color = egui::Color32::from(egui::lerp(START_COLOR..=END_COLOR, weight));
 
-            // TODO: We should sort orders by price and group them by sell/buy and draw two lines going out from the anchor instead
-            let next_point = [self.anchor[0] + delta[0], self.anchor[1] + delta[1]];
+            let next_point = [buy_point[0] + order.delta[0], buy_point[1] + order.delta[1]];
+            ui.line(
+                Line::new(
+                    "Buy Order Arm",
+                    PlotPoints::new(vec![buy_point, next_point]),
+                )
+                .color(color)
+                .style(egui_plot::LineStyle::Solid),
+            );
+            buy_point = next_point;
+        }
 
-            let segment = Line::new(
-                "Active Order",
-                PlotPoints::new(vec![self.anchor, next_point]),
-            )
-            .color(color)
-            .style(egui_plot::LineStyle::Dashed { length: 4.0 }); // Dashed to show it's pending
+        // Sell arm: cumulative sum arcs from anchor
+        let mut sell_point = self.anchor;
+        for order in &self.orders.asks {
+            let elapsed_s = (now - order.created_at)
+                .max(chrono::Duration::zero())
+                .as_seconds_f64();
+            let weight = (-(elapsed_s / self.time_unit_sec) as f32).exp();
 
-            ui.line(segment);
+            const START_COLOR: Rgba = Rgba::from_rgb(0.4, 0.01, 0.01);
+            const END_COLOR: Rgba = Rgba::from_rgb(0.9, 0.2, 0.2);
+            let color = egui::Color32::from(egui::lerp(START_COLOR..=END_COLOR, weight));
+
+            let next_point = [
+                sell_point[0] + order.delta[0],
+                sell_point[1] + order.delta[1],
+            ];
+            ui.line(
+                Line::new(
+                    "Sell Order Arm",
+                    PlotPoints::new(vec![sell_point, next_point]),
+                )
+                .color(color)
+                .style(egui_plot::LineStyle::Solid),
+            );
+            sell_point = next_point;
         }
 
         if let AppMode::Default = self.mode {
