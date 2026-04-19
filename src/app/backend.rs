@@ -4,8 +4,11 @@ use crate::{
     app::backend::models::{OrderListResponse, TradesResponse, WalletsResponse},
     utils::sleep_async,
 };
+use reqwest::Url;
 use serde::de::DeserializeOwned;
-use std::{sync::mpsc::Sender, time::Duration};
+use std::{str::FromStr, sync::mpsc::Sender, time::Duration};
+
+const BASE_URL: &str = "https://apiv2.nobitex.ir";
 
 pub enum BackendEvent {
     FetchedTrades { trajectory: Vec<super::Trade> },
@@ -19,6 +22,7 @@ pub struct NetworkBackend {
     ctx: egui::Context,
     client: reqwest::Client,
     api_key: String,
+    base_url: reqwest::Url, // Store parsed URL here
 }
 
 impl NetworkBackend {
@@ -28,25 +32,19 @@ impl NetworkBackend {
             ctx,
             client: reqwest::Client::new(),
             api_key: std::env::var("NOBITEX_API_KEY").unwrap_or_default(),
+            // Parse once during initialization
+            base_url: reqwest::Url::parse("https://apiv2.nobitex.ir/").unwrap(),
         }
     }
 
     pub async fn fetch_trajectory(&self) {
-        let mut all_trades = Vec::new();
+        let query = [("srcCurrency", "usdt"), ("dstCurrency", "rls")];
 
-        for page in 1.. {
-            let url = format!(
-                "https://apiv2.nobitex.ir/market/trades/list?srcCurrency=usdt&dstCurrency=rls&page={page}&pageSize=100",
-            );
-
-            let trades_response: TradesResponse = self.fetch_endpoint(&url).await;
-            all_trades.extend(trades_response.trades);
-
-            if !trades_response.has_next {
-                log::trace!("Fetched {} trades across {} pages", all_trades.len(), page);
-                break;
-            }
-        }
+        let all_trades = self
+            .fetch_paginated("market/trades/list", &query, |res: TradesResponse| {
+                (res.trades, res.has_next)
+            })
+            .await;
 
         let trajectory = all_trades
             .into_iter()
@@ -56,9 +54,26 @@ impl NetworkBackend {
         self.send_event(BackendEvent::FetchedTrades { trajectory });
     }
 
+    pub async fn fetch_orders(&self) {
+        let query = [
+            ("srcCurrency", "usdt"),
+            ("dstCurrency", "rls"),
+            ("status", "active"),
+        ];
+
+        let orders = self
+            .fetch_paginated("market/orders/list", &query, |res: OrderListResponse| {
+                (res.orders, res.has_next)
+            })
+            .await;
+
+        self.send_event(BackendEvent::FetchedOrders { orders });
+    }
+
     pub async fn fetch_balances(&self) {
+        // No query parameters needed here, so we pass an empty array
         let response: WalletsResponse = self
-            .fetch_endpoint("https://apiv2.nobitex.ir/users/wallets/list")
+            .fetch_endpoint("users/wallets/list", &[] as &[(&str, &str)])
             .await;
 
         let mut current_usdt = 0.0;
@@ -77,35 +92,64 @@ impl NetworkBackend {
         });
     }
 
-    pub async fn fetch_orders(&self) {
-        let mut all_orders = Vec::new();
+    /// Generic helper for fetching all pages of an endpoint
+    async fn fetch_paginated<T, R, F>(
+        &self,
+        endpoint: &str,
+        base_query: &[(&str, &str)],
+        extract: F,
+    ) -> Vec<R>
+    where
+        T: DeserializeOwned,
+        F: Fn(T) -> (Vec<R>, bool), // Extracts (items, has_next) from the response payload
+    {
+        let mut all_items = Vec::new();
 
         for page in 1.. {
-            // Fetch active orders for the frontier (status=open is usually the default, but we fetch all we can for the given market)
-            // You can add `&status=open` or `&status=active` to the URL if you strictly only want open orders from the API side.
-            let url = format!(
-                "https://apiv2.nobitex.ir/market/orders/list?srcCurrency=usdt&dstCurrency=rls&status=active&page={page}&pageSize=100",
-            );
+            let page_str = page.to_string();
 
-            let orders_response: OrderListResponse = self.fetch_endpoint(&url).await;
-            all_orders.extend(orders_response.orders);
+            // Build the query for the current page
+            let mut current_query = base_query.to_vec();
+            current_query.push(("page", &page_str));
+            current_query.push(("pageSize", "100"));
 
-            if !orders_response.has_next {
-                log::trace!("Fetched {} orders across {} pages", all_orders.len(), page);
+            let response: T = self.fetch_endpoint(endpoint, &current_query).await;
+            let (items, has_next) = extract(response);
+
+            all_items.extend(items);
+
+            if !has_next {
+                log::trace!(
+                    "Fetched {} items across {} pages from {}",
+                    all_items.len(),
+                    page,
+                    endpoint
+                );
                 break;
             }
 
             sleep_async(Duration::from_millis(200)).await;
         }
 
-        self.send_event(BackendEvent::FetchedOrders { orders: all_orders });
+        all_items
     }
 
-    async fn fetch_endpoint<T: DeserializeOwned>(&self, url: &str) -> T {
+    /// Base method that hits the endpoint, handles the URL joining, query parameters, and retries.
+    async fn fetch_endpoint<T: DeserializeOwned, Q: serde::Serialize + ?Sized>(
+        &self,
+        endpoint: &str,
+        query: &Q,
+    ) -> T {
+        let url: Url = self
+            .base_url
+            .join(endpoint)
+            .expect("Invalid hardcoded endpoint");
+
         loop {
             let result = async {
                 self.client
-                    .get(url)
+                    .get(url.clone())
+                    .query(query)
                     .header("Authorization", format!("Token {}", self.api_key))
                     .send()
                     .await?
