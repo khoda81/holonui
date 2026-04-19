@@ -60,10 +60,16 @@ impl NetworkBackend {
 
     pub async fn fetch_orders(&self) {
         let mut orders = Vec::new();
-        let query: &[(&str, &str)] = &[];
 
-        loop {
-            let page: OrderPage = self.fetch_endpoint("market/orders/list", query).await;
+        let mut query = HashMap::new();
+
+        query.insert("srcCurrency", "usdt".to_string());
+        query.insert("dstCurrency", "rls".to_string());
+        query.insert("details", "2".to_string());
+
+        for page in 1.. {
+            query.insert("page", page.to_string());
+            let page: OrderPage = self.fetch_endpoint("market/orders/list", &query).await;
 
             orders.extend(page.orders.into_iter().map(models::Order::into_order));
             if !page.has_next {
@@ -95,7 +101,6 @@ impl NetworkBackend {
             anchor: [current_usdt, current_rls],
         });
     }
-
     /// Base method that hits the endpoint, handles the URL joining, query parameters, and retries.
     async fn fetch_endpoint<T, Q>(&self, endpoint: &str, query: &Q) -> T
     where
@@ -110,24 +115,49 @@ impl NetworkBackend {
         loop {
             log::trace!("Sending request for: {}", url.clone());
 
-            let result = async {
-                self.client
-                    .get(url.clone())
-                    .query(query)
-                    .header("Authorization", format!("Token {}", self.api_key))
-                    .send()
-                    .await?
-                    .json::<T>()
-                    .await
-            };
-
-            match result.await {
-                Ok(parsed) => break parsed,
+            // 1. Fetch the raw response
+            let response = match self
+                .client
+                .get(url.clone())
+                .query(query)
+                .header("Authorization", format!("Token {}", self.api_key))
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
                 Err(err) => {
+                    log::error!("Network Error: {err}");
+                    // Assuming RequestError takes the reqwest::Error or a String
+                    // Adjust this if your BackendEvent expects a different type
                     self.send_event(BackendEvent::RequestError(err));
                     sleep_async(Duration::from_secs(3)).await;
+                    continue;
+                }
+            };
+
+            // 2. Extract the raw text body
+            let raw_text = match response.text().await {
+                Ok(text) => text,
+                Err(err) => {
+                    log::error!("Failed to read response text: {err}");
+                    sleep_async(Duration::from_secs(3)).await;
+                    continue;
+                }
+            };
+
+            // 3. Attempt to deserialize, logging the raw text on failure
+            match serde_json::from_str::<T>(&raw_text) {
+                Ok(parsed) => break parsed,
+                Err(parse_err) => {
+                    log::error!(
+                        "JSON Parse Error for {}:\nError: {parse_err}\nRaw Payload: {raw_text}",
+                        url.path(),
+                    );
                 }
             }
+
+            // We wait and retry. You can also send a custom BackendEvent here if needed.
+            sleep_async(Duration::from_secs(3)).await;
         }
     }
 

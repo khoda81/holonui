@@ -65,6 +65,13 @@ pub struct Wallet {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct OrderPage {
+    pub orders: Vec<Order>,
+    #[serde(rename = "hasNext")]
+    pub has_next: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct Order {
     #[serde(rename = "type")]
     pub order_type: TradeType,
@@ -91,11 +98,4 @@ impl Order {
             created_at: self.created_at,
         }
     }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct OrderPage {
-    pub orders: Vec<Order>,
-    #[serde(rename = "hasNext")]
-    pub has_next: bool,
 }
