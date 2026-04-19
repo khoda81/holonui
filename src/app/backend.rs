@@ -1,7 +1,7 @@
 mod models;
 
 use crate::{
-    app::backend::models::{TradesResponse, WalletsResponse},
+    app::backend::models::{OrderListResponse, TradesResponse, WalletsResponse},
     utils::sleep_async,
 };
 use serde::de::DeserializeOwned;
@@ -10,6 +10,7 @@ use std::{sync::mpsc::Sender, time::Duration};
 pub enum BackendEvent {
     FetchedTrades { trajectory: Vec<super::Trade> },
     FetchedBalances { anchor: super::Allocation },
+    FetchedOrders { orders: Vec<models::Order> },
     RequestError(reqwest::Error),
 }
 
@@ -34,7 +35,6 @@ impl NetworkBackend {
         let mut all_trades = Vec::new();
 
         for page in 1.. {
-            // Fetch 100 items per page (the maximum allowed)
             let url = format!(
                 "https://apiv2.nobitex.ir/market/trades/list?srcCurrency=usdt&dstCurrency=rls&page={page}&pageSize=100",
             );
@@ -46,9 +46,6 @@ impl NetworkBackend {
                 log::trace!("Fetched {} trades across {} pages", all_trades.len(), page);
                 break;
             }
-
-            // Optional: Be nice to their API and add a tiny delay between pages
-            sleep_async(Duration::from_millis(200)).await;
         }
 
         let trajectory = all_trades
@@ -60,7 +57,6 @@ impl NetworkBackend {
     }
 
     pub async fn fetch_balances(&self) {
-        // Automatically fetches and parses into WalletsResponse
         let response: WalletsResponse = self
             .fetch_endpoint("https://apiv2.nobitex.ir/users/wallets/list")
             .await;
@@ -81,6 +77,30 @@ impl NetworkBackend {
         });
     }
 
+    pub async fn fetch_orders(&self) {
+        let mut all_orders = Vec::new();
+
+        for page in 1.. {
+            // Fetch active orders for the frontier (status=open is usually the default, but we fetch all we can for the given market)
+            // You can add `&status=open` or `&status=active` to the URL if you strictly only want open orders from the API side.
+            let url = format!(
+                "https://apiv2.nobitex.ir/market/orders/list?srcCurrency=usdt&dstCurrency=rls&status=active&page={page}&pageSize=100",
+            );
+
+            let orders_response: OrderListResponse = self.fetch_endpoint(&url).await;
+            all_orders.extend(orders_response.orders);
+
+            if !orders_response.has_next {
+                log::trace!("Fetched {} orders across {} pages", all_orders.len(), page);
+                break;
+            }
+
+            sleep_async(Duration::from_millis(200)).await;
+        }
+
+        self.send_event(BackendEvent::FetchedOrders { orders: all_orders });
+    }
+
     async fn fetch_endpoint<T: DeserializeOwned>(&self, url: &str) -> T {
         loop {
             let result = async {
@@ -97,7 +117,6 @@ impl NetworkBackend {
                 Ok(parsed) => break parsed,
                 Err(err) => {
                     self.send_event(BackendEvent::RequestError(err));
-                    // Add the delay before retrying!
                     sleep_async(Duration::from_secs(3)).await;
                 }
             }
