@@ -42,10 +42,10 @@ pub struct HolonApp {
 }
 
 fn get_color_rgba(t: f32) -> egui::Color32 {
-    let start_color = Rgba::from(egui::Color32::from_rgb(68, 1, 84)); // Dark purple
-    let end_color = Rgba::from(egui::Color32::from_rgb(253, 231, 37)); // Yellow
+    const START_COLOR: Rgba = Rgba::from_rgb(0.057805434, 0.000303527, 0.088655606); // Dark purple
+    const END_COLOR: Rgba = Rgba::from_rgb(0.9822506, 0.79910284, 0.018500218); // Yellow
 
-    let mixed_rgba = egui::lerp(start_color..=end_color, t);
+    let mixed_rgba = egui::lerp(START_COLOR..=END_COLOR, t);
 
     egui::Color32::from(mixed_rgba)
 }
