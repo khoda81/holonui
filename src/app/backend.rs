@@ -1,6 +1,7 @@
 mod models;
 
 use crate::utils::sleep_async;
+use chrono::Utc;
 use models::{OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
@@ -21,6 +22,16 @@ pub enum BackendEvent {
 pub enum FetchError {
     #[error("Request failed: {0}")]
     Request(reqwest::Error),
+
+    #[error("API error ({code}): {message}")]
+    APIError { message: String, code: String },
+
+    #[error("Rate limit reached: {message}")]
+    RateLimit {
+        message: String,
+        backoff: chrono::DateTime<Utc>,
+        limit: u32,
+    },
 
     #[error("Failed to read response: {0}")]
     Read(reqwest::Error),
@@ -134,9 +145,10 @@ impl NetworkBackend {
                     log::debug!("Fetched successfully: `{}`", url.path());
                     return res;
                 }
-                Err(err) => log::error!("{err}"),
+                Err(err) => log::error!("Error fetching `{}`: {err}", url.path()),
             }
 
+            // TODO: This should be a parameter/constant
             sleep_async(Duration::from_secs(3)).await;
         }
     }
@@ -145,6 +157,11 @@ impl NetworkBackend {
     where
         T: DeserializeOwned,
     {
+        // TODO: Add parsing for known failure messages: {"status": "failed", "message": "\u062a\u0639\u062f\u0627\u062f \u062f\u0631\u062e\u0648\u0627\u0633\u062a \u0634\u0645\u0627 \u0628\u06cc\u0634 \u0627\u0632 \u062d\u062f \u0645\u0639\u0645\u0648\u0644 \u062a\u0634\u062e\u06cc\u0635 \u062f\u0627\u062f\u0647 \u0634\u062f\u0647. \u0644\u0637\u0641\u0627 0 \u062b\u0627\u0646\u06cc\u0647 \u0635\u0628\u0631 \u0646\u0645\u0627\u06cc\u06cc\u062f.", "code": "TooManyRequests", "backOff": 0, "limit": 30}
+        //       Where the api is telling us that it has failed, we should print the message.
+
+        // TODO: Add a custom error type for rate limits so that the retry loop can wait for exactly that duration instead of retrying blindly
+
         let raw_text = request
             .send()
             .await
@@ -153,7 +170,7 @@ impl NetworkBackend {
             .await
             .map_err(FetchError::Read)?;
 
-        serde_json::from_str::<T>(&raw_text).map_err(|err| FetchError::Parse(err, raw_text))
+        serde_json::from_str(&raw_text).map_err(|err| FetchError::Parse(err, raw_text))
     }
 
     fn send_event(&self, event: BackendEvent) {

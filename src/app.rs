@@ -163,7 +163,7 @@ impl HolonApp {
                 .color(END_COLOR),
         );
 
-        // Draw the order line allocation
+        // TODO: We should sort orders by price and group them by sell/buy and draw two lines going out from the anchor instead
         for Order { delta, created_at } in self.orders.iter() {
             let elapsed = now - *created_at;
             let mut elapsed_s = elapsed.as_seconds_f64();
@@ -175,13 +175,12 @@ impl HolonApp {
             let delta_t = elapsed_s / self.time_unit_sec;
             let weight = (-delta_t as f32).exp();
 
-            // Distinct color gradient for orders (e.g., Deep Blue to Cyan)
             const START_COLOR: Rgba = Rgba::from_rgb(0.01, 0.1, 0.4);
             const END_COLOR: Rgba = Rgba::from_rgb(0.2, 0.8, 0.9);
 
             let color = egui::Color32::from(egui::lerp(START_COLOR..=END_COLOR, weight));
 
-            // Orders project out from the current anchor point
+            // TODO: We should sort orders by price and group them by sell/buy and draw two lines going out from the anchor instead
             let next_point = [self.anchor[0] + delta[0], self.anchor[1] + delta[1]];
 
             let segment = Line::new(
