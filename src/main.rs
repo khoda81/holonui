@@ -24,7 +24,6 @@ fn main() -> eframe::Result<()> {
             .start(
                 canvas,
                 web_options,
-                // FIX: Wrapped the return value in Ok()
                 Box::new(|cc| Ok(Box::new(HolonApp::new(cc)))),
             )
             .await

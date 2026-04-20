@@ -62,7 +62,6 @@ impl NetworkBackend {
         query.insert("srcCurrency", "usdt".to_string());
         query.insert("dstCurrency", "rls".to_string());
 
-        // TODO: We should probably stream this to the ui instead of waiting for the full list
         let mut trajectory = Vec::new();
         for page in 1.. {
             query.insert("page", page.to_string());

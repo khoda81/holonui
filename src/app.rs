@@ -6,7 +6,7 @@ use crate::{
     utils::{format_humantime, spawn_local},
 };
 use chrono::{DateTime, Utc};
-use egui_plot::{GridInput, GridMark, HLine, Line, Plot, PlotPoint, PlotPoints, Points, VLine};
+use egui_plot::{GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints, Points, VLine};
 use std::sync::mpsc::Receiver;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -81,6 +81,39 @@ fn grid_marks(input: GridInput, log_spacing: bool, positive_only: bool) -> Vec<G
 }
 
 impl HolonApp {
+    fn order_frontier_bounds(&self) -> PlotBounds {
+        let mut bounds = PlotBounds::NOTHING;
+        bounds.extend_with(&PlotPoint::from(self.anchor));
+        bounds.extend_with(&PlotPoint::new(0.0, 0.0));
+
+        let mut buy_point = self.anchor;
+        for order in &self.orders.bids {
+            buy_point = [buy_point[0] + order.delta[0], buy_point[1] + order.delta[1]];
+            bounds.extend_with(&PlotPoint::from(buy_point));
+        }
+
+        let mut sell_point = self.anchor;
+        for order in &self.orders.asks {
+            sell_point = [sell_point[0] + order.delta[0], sell_point[1] + order.delta[1]];
+            bounds.extend_with(&PlotPoint::from(sell_point));
+        }
+
+        let min_width = 1e-9;
+        let min_height = 1e-9;
+        if bounds.width() <= min_width {
+            bounds.expand_x(min_width);
+        }
+        if bounds.height() <= min_height {
+            bounds.expand_y(min_height);
+        }
+
+        let x_pad = (bounds.width() * 0.06).max(min_width);
+        let y_pad = (bounds.height() * 0.06).max(min_height);
+        bounds.expand_x(x_pad);
+        bounds.expand_y(y_pad);
+        bounds
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx_clone = cc.egui_ctx.clone();
@@ -170,6 +203,17 @@ impl HolonApp {
     }
 
     fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
+        if self.show_order_frontier {
+            let auto = ui.auto_bounds();
+            let bounds = self.order_frontier_bounds();
+            if auto.x {
+                ui.set_plot_bounds_x(bounds.range_x());
+            }
+            if auto.y {
+                ui.set_plot_bounds_y(bounds.range_y());
+            }
+        }
+
         let mut current_point = self.anchor;
 
         let now = Utc::now();
