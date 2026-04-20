@@ -60,6 +60,8 @@ pub struct HolonApp {
 
 fn grid_marks(input: GridInput, log_spacing: bool, positive_only: bool) -> Vec<GridMark> {
     let marks = if log_spacing {
+        // FIX: The log spacing is not really logarithmic, it's just the linear spacing but weirder...
+        // TODO: How does grid spacer work in egui anyways?
         let spacer = egui_plot::log_grid_spacer(10);
         spacer(input)
     } else {
@@ -172,6 +174,7 @@ impl HolonApp {
 
         let now = Utc::now();
 
+        // TODO: How do we hide the legend for these?
         // Make the real origin axes obvious.
         ui.hline(
             HLine::new("Y = 0", 0.0)
@@ -183,6 +186,8 @@ impl HolonApp {
                 .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
                 .width(2.2),
         );
+
+        // TODO: Can we label the axis with the currency name?
 
         // Draw trajectory as age-faded segments in one color family.
         for Trade { delta, timestamp } in self.trajectory.iter() {
