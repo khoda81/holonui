@@ -48,6 +48,7 @@ pub struct HolonApp {
     positive_only_grid: bool,
     show_trajectory: bool,
     show_order_frontier: bool,
+    bounds_need_update: bool,
 }
 
 fn grid_marks(input: GridInput, positive_only: bool) -> Vec<GridMark> {
@@ -128,15 +129,22 @@ impl HolonApp {
             positive_only_grid: true,
             show_trajectory: true,
             show_order_frontier: true,
+            bounds_need_update: false,
         }
     }
 
     pub fn update(&mut self) {
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
-                BackendEvent::Orders(orders) => self.orders = orders,
+                BackendEvent::Orders(orders) => {
+                    self.bounds_need_update = true;
+                    self.orders = orders
+                }
                 BackendEvent::Trades { trajectory } => self.trajectory = trajectory,
-                BackendEvent::Balances { anchor } => self.anchor = anchor,
+                BackendEvent::Balances { anchor } => {
+                    self.bounds_need_update = true;
+                    self.anchor = anchor
+                }
             }
         }
     }
@@ -176,8 +184,8 @@ impl HolonApp {
             Plot::new("skyline_plot")
                 .show_grid(true)
                 .legend(egui_plot::Legend::default())
-                .include_x(0.0)
-                .include_y(0.0)
+                .auto_bounds(false)
+                .allow_double_click_reset(false)
                 .x_grid_spacer(move |input| grid_marks(input, positive_only_grid))
                 .y_grid_spacer(move |input| grid_marks(input, positive_only_grid))
                 .show(ui, |ui| self.render_plot_contents(ui));
@@ -185,20 +193,19 @@ impl HolonApp {
     }
 
     fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
-        if self.show_order_frontier {
-            let auto = ui.auto_bounds();
+        if ui.response().double_clicked() || self.bounds_need_update {
             let bounds = self.order_frontier_bounds();
-            if auto.x {
-                ui.set_plot_bounds_x(bounds.range_x());
-            }
-            if auto.y {
-                ui.set_plot_bounds_y(bounds.range_y());
-            }
+            ui.set_plot_bounds_x(bounds.range_x());
+            ui.set_plot_bounds_y(bounds.range_y());
+
+            self.bounds_need_update = false;
         }
 
-        let mut current_point = self.anchor;
+        // TODO: Draw the budget line passing through anchor, highlighted point
 
         let now = Utc::now();
+
+        let mut current_point = self.anchor;
 
         // TODO: How do we hide the legend for these?
         // Make the real origin axes obvious.
