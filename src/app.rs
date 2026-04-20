@@ -6,7 +6,9 @@ use crate::{
     utils::{format_humantime, spawn_local},
 };
 use chrono::{DateTime, Utc};
-use egui_plot::{GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints, Points, VLine};
+use egui_plot::{
+    GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints, Points, VLine,
+};
 use std::sync::mpsc::Receiver;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -58,20 +60,11 @@ pub struct HolonApp {
     show_order_frontier: bool,
 }
 
-fn grid_marks(input: GridInput, log_spacing: bool, positive_only: bool) -> Vec<GridMark> {
-    let marks = if log_spacing {
-        // FIX: The log spacing is not really logarithmic, it's just the linear spacing but weirder...
-        // TODO: How does grid spacer work in egui anyways?
-        let spacer = egui_plot::log_grid_spacer(10);
-        spacer(input)
-    } else {
-        let spacer = egui_plot::uniform_grid_spacer(|input| {
-            let base = input.base_step_size.abs().max(f64::EPSILON);
-            let decade = 10_f64.powf(base.log10().floor());
-            [decade, decade * 2.0, decade * 10.0]
-        });
-        spacer(input)
-    };
+fn grid_marks(input: GridInput, positive_only: bool) -> Vec<GridMark> {
+    // TODO: How does grid spacer work in egui?
+    let spacer = egui_plot::log_grid_spacer(10);
+
+    let marks = spacer(input);
 
     if positive_only {
         marks.into_iter().filter(|mark| mark.value >= 0.0).collect()
@@ -94,7 +87,10 @@ impl HolonApp {
 
         let mut sell_point = self.anchor;
         for order in &self.orders.asks {
-            sell_point = [sell_point[0] + order.delta[0], sell_point[1] + order.delta[1]];
+            sell_point = [
+                sell_point[0] + order.delta[0],
+                sell_point[1] + order.delta[1],
+            ];
             bounds.extend_with(&PlotPoint::from(sell_point));
         }
 
@@ -186,7 +182,6 @@ impl HolonApp {
             });
 
             let scale_plot = !self.mode.is_ghost_line();
-            let log_grid_spacing = self.log_grid_spacing;
             let positive_only_grid = self.positive_only_grid;
 
             Plot::new("skyline_plot")
@@ -194,8 +189,8 @@ impl HolonApp {
                 .legend(egui_plot::Legend::default())
                 .include_x(0.0)
                 .include_y(0.0)
-                .x_grid_spacer(move |input| grid_marks(input, log_grid_spacing, positive_only_grid))
-                .y_grid_spacer(move |input| grid_marks(input, log_grid_spacing, positive_only_grid))
+                .x_grid_spacer(move |input| grid_marks(input, positive_only_grid))
+                .y_grid_spacer(move |input| grid_marks(input, positive_only_grid))
                 .allow_double_click_reset(scale_plot)
                 .auto_bounds(scale_plot)
                 .show(ui, |ui| self.render_plot_contents(ui));
@@ -235,6 +230,7 @@ impl HolonApp {
 
         // Draw trajectory as age-faded segments in one color family.
         for Trade { delta, timestamp } in self.trajectory.iter() {
+            // TODO: The freshness calculation can probably be refactored out
             let elapsed = now - *timestamp;
             let mut elapsed_s = elapsed.as_seconds_f64();
 
@@ -252,6 +248,7 @@ impl HolonApp {
 
             let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
             // TODO: Drawing as separate lines causes weird artifact at the joints where two lines overlap for one pixel
+            // TODO: Can we use additive blending to make the redrawn lines visually better? Additive blending that can cause overblown colors and bloom is even better like a laser/light source
             let segment = Line::new(
                 "Trajectory",
                 PlotPoints::new(vec![current_point, next_point]),
@@ -269,38 +266,22 @@ impl HolonApp {
             current_point = next_point;
         }
 
-        ui.points(
-            Points::new("Anchor (Current Balance)", vec![self.anchor])
-                .radius(6.5)
-                .color(egui::Color32::from_rgb(250, 244, 230)),
-        );
-
         if self.show_order_frontier {
             // Buy arm: cumulative chain from anchor.
             let mut buy_point = self.anchor;
             let mut buy_nodes = vec![buy_point];
             for order in &self.orders.bids {
-                // TODO: The freshness calculation can probably be refactored out
-                let elapsed_s = (now - order.created_at)
-                    .max(chrono::Duration::zero())
-                    .as_seconds_f64();
-
-                let freshness = (-(elapsed_s / self.time_unit_sec) as f32).exp();
-                // TODO: Can we use additive blending to make the redrawn lines visually better? Additive blending that can cause overblown colors and bloom is even better like a laser/light source
-                // TODO: Considering the freshness of orders does not matter actually, we may want to visually set their intensity based on distance from market best bid/ask. A rouph estimation of when it may go through
-                let alpha = (240.0 * freshness) as u8;
-                let color = egui::Color32::from_rgba_unmultiplied(46, 204, 133, alpha);
+                // TODO: Considering the freshness of orders does not matter actually, we may want to visually set their intensity based on distance from market best bid/ask. An estimation of when it may go through
+                let color = egui::Color32::from_rgba_unmultiplied(46, 204, 133, 240);
 
                 let next_point = [buy_point[0] + order.delta[0], buy_point[1] + order.delta[1]];
 
-                if alpha > 0 {
-                    ui.line(
-                        Line::new("Bid Orders", PlotPoints::new(vec![buy_point, next_point]))
-                            .color(color)
-                            .width(2.6)
-                            .style(egui_plot::LineStyle::Solid),
-                    );
-                }
+                ui.line(
+                    Line::new("Bid Orders", PlotPoints::new(vec![buy_point, next_point]))
+                        .color(color)
+                        .width(2.6)
+                        .style(egui_plot::LineStyle::Solid),
+                );
 
                 buy_point = next_point;
                 buy_nodes.push(next_point);
@@ -318,27 +299,19 @@ impl HolonApp {
             let mut sell_point = self.anchor;
             let mut sell_nodes = vec![sell_point];
             for order in &self.orders.asks {
-                let elapsed_s = (now - order.created_at)
-                    .max(chrono::Duration::zero())
-                    .as_seconds_f64();
-
-                let freshness = (-(elapsed_s / self.time_unit_sec) as f32).exp();
-                let alpha = (240.0 * freshness) as u8;
-                let color = egui::Color32::from_rgba_unmultiplied(235, 87, 87, alpha);
+                let color = egui::Color32::from_rgba_unmultiplied(235, 87, 87, 240);
 
                 let next_point = [
                     sell_point[0] + order.delta[0],
                     sell_point[1] + order.delta[1],
                 ];
 
-                if alpha > 0 {
-                    ui.line(
-                        Line::new("Ask Orders", PlotPoints::new(vec![sell_point, next_point]))
-                            .color(color)
-                            .width(2.6)
-                            .style(egui_plot::LineStyle::Solid),
-                    );
-                }
+                ui.line(
+                    Line::new("Ask Orders", PlotPoints::new(vec![sell_point, next_point]))
+                        .color(color)
+                        .width(2.6)
+                        .style(egui_plot::LineStyle::Solid),
+                );
 
                 sell_point = next_point;
                 sell_nodes.push(next_point);
@@ -351,6 +324,12 @@ impl HolonApp {
                 );
             }
         }
+
+        ui.points(
+            Points::new("Anchor (Current Balance)", vec![self.anchor])
+                .radius(6.5)
+                .color(egui::Color32::from_rgb(250, 244, 230)),
+        );
 
         if let AppMode::Default = self.mode {
             return;

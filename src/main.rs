@@ -34,13 +34,11 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
-    // 1. Load Environment Variables & Setup Logging
     dotenvy::dotenv().ok();
-    env_logger::init(); // Requires `RUST_LOG=info` environment variable
+    env_logger::init();
 
     log::info!("Starting HolonApp...");
 
-    // 4. Start the native UI
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
         "Holon eFrame App",
