@@ -199,6 +199,7 @@ impl HolonApp {
             let color = egui::Color32::from_rgba_unmultiplied(108, 156, 217, alpha);
 
             let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
+            // TODO: Drawing as separate lines causes weird artifact at the joints where two lines overlap for one pixel
             let segment = Line::new(
                 "Trajectory",
                 PlotPoints::new(vec![current_point, next_point]),
@@ -231,7 +232,9 @@ impl HolonApp {
                 let elapsed_s = (now - order.created_at)
                     .max(chrono::Duration::zero())
                     .as_seconds_f64();
+
                 let freshness = (-(elapsed_s / self.time_unit_sec) as f32).exp();
+                // TODO: Considering the freshness of orders does not matter actually, we may want to visually set their intensity based on distance from market best bid/ask. A rouph estimation of when it may go through
                 let alpha = (240.0 * freshness) as u8;
                 let color = egui::Color32::from_rgba_unmultiplied(46, 204, 133, alpha);
 

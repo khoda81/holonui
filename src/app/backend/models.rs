@@ -121,8 +121,8 @@ impl From<Order> for crate::app::Order {
         let total = value.unmatched_amount * value.price;
 
         let delta = match value.order_type {
-            TradeType::Buy => [-value.unmatched_amount, total],
-            TradeType::Sell => [value.unmatched_amount, -total],
+            TradeType::Buy => [value.unmatched_amount, -total],
+            TradeType::Sell => [-value.unmatched_amount, total],
         };
 
         crate::app::Order {
