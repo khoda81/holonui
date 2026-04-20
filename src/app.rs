@@ -18,16 +18,6 @@ enum AppMode {
     GhostLine,
 }
 
-impl AppMode {
-    /// Returns `true` if the app state is [`GhostLine`].
-    ///
-    /// [`GhostLine`]: AppMode::GhostLine
-    #[must_use]
-    fn is_ghost_line(&self) -> bool {
-        matches!(self, Self::GhostLine)
-    }
-}
-
 #[derive(Clone, Debug)]
 struct Trade {
     delta: [f64; 2],
@@ -181,7 +171,6 @@ impl HolonApp {
                 ui.checkbox(&mut self.show_order_frontier, "Show Order Frontier");
             });
 
-            let scale_plot = !self.mode.is_ghost_line();
             let positive_only_grid = self.positive_only_grid;
 
             Plot::new("skyline_plot")
@@ -191,8 +180,6 @@ impl HolonApp {
                 .include_y(0.0)
                 .x_grid_spacer(move |input| grid_marks(input, positive_only_grid))
                 .y_grid_spacer(move |input| grid_marks(input, positive_only_grid))
-                .allow_double_click_reset(scale_plot)
-                .auto_bounds(scale_plot)
                 .show(ui, |ui| self.render_plot_contents(ui));
         });
     }
