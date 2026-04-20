@@ -55,3 +55,20 @@ pub fn format_humantime(sec: f64) -> String {
         _ => format!("{:.1} years", total_days / 356),
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn get_api_key() -> Option<String> {
+    std::env::var("NOBITEX_API_KEY").ok().or_else(|| {
+        log::debug!("Loading key from keyring");
+
+        keyring::Entry::new("holonui", "default-user")
+            .ok()?
+            .get_password()
+            .ok()
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn get_api_key() -> Option<String> {
+    std::env::var("NOBITEX_API_KEY").ok().or_else(|| todo!())
+}

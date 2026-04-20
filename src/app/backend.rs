@@ -1,12 +1,13 @@
 mod models;
 
 use crate::app::backend::models::{ApiFailure, ApiResponse};
-use crate::utils::sleep_async;
+use crate::utils::{get_api_key, sleep_async};
 use models::{OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::{sync::mpsc::Sender, time::Duration};
+use std::sync::mpsc::Sender;
+use std::time::Duration;
 use thiserror::Error;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
@@ -52,7 +53,7 @@ impl NetworkBackend {
             sender,
             ctx,
             client: reqwest::Client::new(),
-            api_key: std::env::var("NOBITEX_API_KEY").unwrap_or_default(),
+            api_key: get_api_key().unwrap_or_default(),
             base_url: reqwest::Url::parse(BASE_URL).unwrap(),
         }
     }

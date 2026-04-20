@@ -21,6 +21,7 @@ reqwest = { version = "0.13", features = ["json", "rustls", "query"] }
 dotenvy = "0.15"
 env_logger = "0.11"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+keyring = { version = "3", features = ["sync-secret-service"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { version = "0.4", features = ["futures"] }
