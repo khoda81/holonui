@@ -161,12 +161,15 @@ impl NetworkBackend {
 
             match err {
                 FetchError::APIError {
-                    message,
                     error: ApiFailure::RateLimit { backoff, .. },
                     ..
                 } => {
-                    log::warn!("API limit reached for {}: {message}", url.path());
-                    sleep_async(Duration::from_secs(backoff + 1)).await;
+                    let wait = backoff + 1;
+                    log::warn!(
+                        "API limit reached for {}: waiting {wait} seconds for retry",
+                        url.path()
+                    );
+                    sleep_async(Duration::from_secs(wait)).await;
                     continue;
                 }
 
