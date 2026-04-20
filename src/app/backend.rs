@@ -10,6 +10,7 @@ use std::{sync::mpsc::Sender, time::Duration};
 use thiserror::Error;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
+const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 pub enum BackendEvent {
     Trades { trajectory: Vec<super::Trade> },
@@ -61,6 +62,7 @@ impl NetworkBackend {
         query.insert("srcCurrency", "usdt".to_string());
         query.insert("dstCurrency", "rls".to_string());
 
+        // TODO: We should probably stream this to the ui instead of waiting for the full list
         let mut trajectory = Vec::new();
         for page in 1.. {
             query.insert("page", page.to_string());
@@ -68,12 +70,14 @@ impl NetworkBackend {
 
             trajectory.extend(page.trades.into_iter().map(Into::into));
 
+            self.send_event(BackendEvent::Trades {
+                trajectory: trajectory.clone(),
+            });
+
             if !page.has_next {
                 break;
             }
         }
-
-        self.send_event(BackendEvent::Trades { trajectory });
     }
 
     pub async fn fetch_orders(&self) {
@@ -159,29 +163,30 @@ impl NetworkBackend {
                 Err(err) => err,
             };
 
+            let mut retry_delay = DEFAULT_RETRY_DELAY;
+
             match err {
                 FetchError::APIError {
                     error: ApiFailure::RateLimit { backoff, .. },
                     ..
                 } => {
-                    let wait = backoff + 1;
+                    retry_delay = Duration::from_secs(backoff + 1);
+
                     log::warn!(
-                        "API limit reached for {}: waiting {wait} seconds for retry",
-                        url.path()
-                    );
-                    sleep_async(Duration::from_secs(wait)).await;
-                    continue;
+                        "API limit reached for {}: waiting {} seconds for retry",
+                        url.path(),
+                        retry_delay.as_secs()
+                    )
                 }
 
                 FetchError::APIError { message, code, .. } => {
-                    log::error!("API error fetching `{}` ({code}): {message}", url.path());
+                    log::error!("API error fetching `{}` ({code}): {message}", url.path())
                 }
 
                 err => log::error!("Error fetching `{}`: {err}", url.path()),
             }
 
-            // TODO: This should be a parameter/constant
-            sleep_async(Duration::from_secs(3)).await;
+            sleep_async(retry_delay).await;
         }
     }
 

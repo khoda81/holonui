@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use egui_plot::{GridInput, GridMark, HLine, Line, Plot, PlotPoint, PlotPoints, Points, VLine};
 use std::sync::mpsc::Receiver;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 enum AppMode {
     #[default]
     Default,
@@ -26,16 +26,19 @@ impl AppMode {
     }
 }
 
+#[derive(Clone, Debug)]
 struct Trade {
     delta: [f64; 2],
     timestamp: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug)]
 struct Order {
     delta: [f64; 2],
     created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug)]
 struct Orders {
     bids: Vec<Order>,
     asks: Vec<Order>,
@@ -234,6 +237,7 @@ impl HolonApp {
                     .as_seconds_f64();
 
                 let freshness = (-(elapsed_s / self.time_unit_sec) as f32).exp();
+                // TODO: Can we use additive blending to make the redrawn lines visually better? Additive blending that can cause overblown colors and bloom is even better like a laser/light source
                 // TODO: Considering the freshness of orders does not matter actually, we may want to visually set their intensity based on distance from market best bid/ask. A rouph estimation of when it may go through
                 let alpha = (240.0 * freshness) as u8;
                 let color = egui::Color32::from_rgba_unmultiplied(46, 204, 133, alpha);
@@ -252,6 +256,7 @@ impl HolonApp {
                 buy_point = next_point;
                 buy_nodes.push(next_point);
             }
+
             if buy_nodes.len() > 1 {
                 ui.points(
                     Points::new("Bid Order Nodes", buy_nodes)
@@ -267,6 +272,7 @@ impl HolonApp {
                 let elapsed_s = (now - order.created_at)
                     .max(chrono::Duration::zero())
                     .as_seconds_f64();
+
                 let freshness = (-(elapsed_s / self.time_unit_sec) as f32).exp();
                 let alpha = (240.0 * freshness) as u8;
                 let color = egui::Color32::from_rgba_unmultiplied(235, 87, 87, alpha);

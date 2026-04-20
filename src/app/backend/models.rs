@@ -12,7 +12,7 @@ where
     s.parse().map_err(serde::de::Error::custom)
 }
 
-#[derive(Deserialize, Error, Debug)]
+#[derive(Clone, Deserialize, Error, Debug)]
 #[serde(untagged)]
 pub enum ApiFailure {
     #[error("Rate limit reached until {backoff} seconds (limit: {limit})")]
@@ -26,7 +26,7 @@ pub enum ApiFailure {
     Other(Value),
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "status")]
 pub enum ApiResponse<T> {
     #[serde(rename = "ok")]
@@ -42,14 +42,14 @@ pub enum ApiResponse<T> {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TradesPage {
     pub trades: Vec<Trade>,
     #[serde(rename = "hasNext")]
     pub has_next: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Trade {
     pub id: u64,
     #[serde(rename = "type")]
@@ -77,33 +77,33 @@ impl From<Trade> for crate::app::Trade {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TradeType {
     Buy,
     Sell,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WalletsResponse {
     pub wallets: Vec<Wallet>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Wallet {
     pub currency: String,
     #[serde(deserialize_with = "f64_from_str")]
     pub balance: f64,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct OrderPage {
     pub orders: Vec<Order>,
     #[serde(rename = "hasNext")]
     pub has_next: bool,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 pub struct Order {
     #[serde(rename = "type")]
     pub order_type: TradeType,
