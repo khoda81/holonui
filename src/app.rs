@@ -1,14 +1,15 @@
 mod backend;
+mod plot;
 
 use crate::{
     Allocation,
-    app::backend::{BackendEvent, NetworkBackend},
+    app::{
+        backend::{BackendEvent, NetworkBackend},
+        plot::PlotPanel,
+    },
     utils::{format_humantime, spawn_local},
 };
 use chrono::{DateTime, Utc};
-use egui_plot::{
-    GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints, Points, VLine,
-};
 use std::sync::mpsc::Receiver;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -37,70 +38,13 @@ struct Orders {
 }
 
 pub struct HolonApp {
-    trajectory: Vec<Trade>,
-    orders: Orders,
-    anchor: Allocation,
-    mode: AppMode,
     api_receiver: Receiver<BackendEvent>,
-    /// Tracks the time unit for the color decay weight
-    time_unit_sec: f64,
-    log_grid_spacing: bool,
-    positive_only_grid: bool,
-    show_trajectory: bool,
-    show_order_frontier: bool,
-    bounds_need_update: bool,
-}
+    mode: AppMode,
 
-fn grid_marks(input: GridInput, positive_only: bool) -> Vec<GridMark> {
-    // TODO: How does grid spacer work in egui?
-    let spacer = egui_plot::log_grid_spacer(10);
-
-    let marks = spacer(input);
-
-    if positive_only {
-        marks.into_iter().filter(|mark| mark.value >= 0.0).collect()
-    } else {
-        marks
-    }
+    plot_panel: plot::PlotPanel,
 }
 
 impl HolonApp {
-    fn order_frontier_bounds(&self) -> PlotBounds {
-        let mut bounds = PlotBounds::NOTHING;
-        bounds.extend_with(&PlotPoint::from(self.anchor));
-        bounds.extend_with(&PlotPoint::new(0.0, 0.0));
-
-        let mut buy_point = self.anchor;
-        for order in &self.orders.bids {
-            buy_point = [buy_point[0] + order.delta[0], buy_point[1] + order.delta[1]];
-            bounds.extend_with(&PlotPoint::from(buy_point));
-        }
-
-        let mut sell_point = self.anchor;
-        for order in &self.orders.asks {
-            sell_point = [
-                sell_point[0] + order.delta[0],
-                sell_point[1] + order.delta[1],
-            ];
-            bounds.extend_with(&PlotPoint::from(sell_point));
-        }
-
-        let min_width = 1e-9;
-        let min_height = 1e-9;
-        if bounds.width() <= min_width {
-            bounds.expand_x(min_width);
-        }
-        if bounds.height() <= min_height {
-            bounds.expand_y(min_height);
-        }
-
-        let x_pad = (bounds.width() * 0.06).max(min_width);
-        let y_pad = (bounds.height() * 0.06).max(min_height);
-        bounds.expand_x(x_pad);
-        bounds.expand_y(y_pad);
-        bounds
-    }
-
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx_clone = cc.egui_ctx.clone();
@@ -117,34 +61,17 @@ impl HolonApp {
 
         Self {
             mode: AppMode::Default,
-            orders: Orders {
-                bids: vec![],
-                asks: vec![],
-            },
-            trajectory: vec![],
-            anchor: [0.0, 0.0],
             api_receiver: rx,
-            time_unit_sec: chrono::Duration::days(2).as_seconds_f64(),
-            log_grid_spacing: false,
-            positive_only_grid: true,
-            show_trajectory: true,
-            show_order_frontier: true,
-            bounds_need_update: false,
+            plot_panel: PlotPanel::new(),
         }
     }
 
     pub fn update(&mut self) {
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
-                BackendEvent::Orders(orders) => {
-                    self.bounds_need_update = true;
-                    self.orders = orders
-                }
-                BackendEvent::Trades { trajectory } => self.trajectory = trajectory,
-                BackendEvent::Balances { anchor } => {
-                    self.bounds_need_update = true;
-                    self.anchor = anchor
-                }
+                BackendEvent::Orders(orders) => self.plot_panel.set_orders(orders),
+                BackendEvent::Trades { trajectory } => self.plot_panel.set_trajectory(trajectory),
+                BackendEvent::Balances { anchor } => self.plot_panel.set_anchor(anchor),
             }
         }
     }
@@ -165,195 +92,48 @@ impl HolonApp {
             ui.horizontal(|ui| {
                 ui.label("Time Unit:");
                 ui.add(
-                    egui::Slider::new(&mut self.time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
+                    egui::Slider::new(&mut self.plot_panel.time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
                         .logarithmic(true)
                         .custom_formatter(|sec, _| format_humantime(sec)),
                 );
             });
+
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.log_grid_spacing, "Logarithmic Grid Spacing");
-                ui.checkbox(&mut self.positive_only_grid, "Positive-Only Grid");
-            });
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.show_trajectory, "Show Trajectory");
-                ui.checkbox(&mut self.show_order_frontier, "Show Order Frontier");
+                ui.checkbox(
+                    &mut self.plot_panel.log_grid_spacing,
+                    "Logarithmic Grid Spacing",
+                );
+                ui.checkbox(
+                    &mut self.plot_panel.positive_only_grid,
+                    "Positive-Only Grid",
+                );
             });
 
-            let positive_only_grid = self.positive_only_grid;
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.plot_panel.show_trajectory, "Show Trajectory");
+                ui.checkbox(
+                    &mut self.plot_panel.show_order_frontier,
+                    "Show Order Frontier",
+                );
+            });
 
-            Plot::new("skyline_plot")
-                .show_grid(true)
-                .legend(egui_plot::Legend::default())
-                .auto_bounds(false)
-                .allow_double_click_reset(false)
-                .x_grid_spacer(move |input| grid_marks(input, positive_only_grid))
-                .y_grid_spacer(move |input| grid_marks(input, positive_only_grid))
-                .show(ui, |ui| self.render_plot_contents(ui));
+            let now = Utc::now();
+            let response = self.plot_panel.show(ui, self.mode, now);
+
+            if let Some(delta) = response.inner.clicked_delta {
+                log::info!("Placed order (Delta: {delta:.2?})");
+                self.mode = AppMode::Default;
+            }
         });
-    }
-
-    fn render_plot_contents(&mut self, ui: &mut egui_plot::PlotUi<'_>) {
-        if ui.response().double_clicked() || self.bounds_need_update {
-            let bounds = self.order_frontier_bounds();
-            ui.set_plot_bounds_x(bounds.range_x());
-            ui.set_plot_bounds_y(bounds.range_y());
-
-            self.bounds_need_update = false;
-        }
-
-        // TODO: Draw the budget line passing through anchor, highlighted point
-
-        let now = Utc::now();
-
-        let mut current_point = self.anchor;
-
-        // TODO: How do we hide the legend for these?
-        // Make the real origin axes obvious.
-        ui.hline(
-            HLine::new("Y = 0", 0.0)
-                .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
-                .width(2.2),
-        );
-        ui.vline(
-            VLine::new("X = 0", 0.0)
-                .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
-                .width(2.2),
-        );
-
-        // TODO: Can we label the axis with the currency name?
-
-        // Draw trajectory as age-faded segments in one color family.
-        for Trade { delta, timestamp } in self.trajectory.iter() {
-            // TODO: The freshness calculation can probably be refactored out
-            let elapsed = now - *timestamp;
-            let mut elapsed_s = elapsed.as_seconds_f64();
-
-            // Ensure dt is never negative
-            if elapsed_s < 0.0 {
-                log::warn!("Unexpected negative elapsed time for a trade");
-                elapsed_s = 0.0;
-            }
-
-            // Calculate ratio and the exponential decay weight
-            let delta_t = elapsed_s / self.time_unit_sec;
-            let freshness = (-delta_t as f32).exp(); // 1.0 = recent, 0.0 = old
-            let alpha = (215.0 * freshness) as u8;
-            let color = egui::Color32::from_rgba_unmultiplied(108, 156, 217, alpha);
-
-            let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
-            // TODO: Drawing as separate lines causes weird artifact at the joints where two lines overlap for one pixel
-            // TODO: Can we use additive blending to make the redrawn lines visually better? Additive blending that can cause overblown colors and bloom is even better like a laser/light source
-            let segment = Line::new(
-                "Trajectory",
-                PlotPoints::new(vec![current_point, next_point]),
-            )
-            .color(color)
-            .width(2.0)
-            .allow_hover(false)
-            .style(egui_plot::LineStyle::Solid);
-
-            // TODO: This causes weird rescaling for the plot when the time unit is adjusted, how do we tell egui to not zoom out for the trajectory lines?
-            if self.show_trajectory && alpha > 0 {
-                ui.line(segment);
-            }
-
-            current_point = next_point;
-        }
-
-        if self.show_order_frontier {
-            // Buy arm: cumulative chain from anchor.
-            let mut buy_point = self.anchor;
-            let mut buy_nodes = vec![buy_point];
-            for order in &self.orders.bids {
-                // TODO: Considering the freshness of orders does not matter actually, we may want to visually set their intensity based on distance from market best bid/ask. An estimation of when it may go through
-                let color = egui::Color32::from_rgba_unmultiplied(46, 204, 133, 240);
-
-                let next_point = [buy_point[0] + order.delta[0], buy_point[1] + order.delta[1]];
-
-                ui.line(
-                    Line::new("Bid Orders", PlotPoints::new(vec![buy_point, next_point]))
-                        .color(color)
-                        .width(2.6)
-                        .style(egui_plot::LineStyle::Solid),
-                );
-
-                buy_point = next_point;
-                buy_nodes.push(next_point);
-            }
-
-            if buy_nodes.len() > 1 {
-                ui.points(
-                    Points::new("Bid Order Nodes", buy_nodes)
-                        .radius(3.2)
-                        .color(egui::Color32::from_rgba_unmultiplied(92, 230, 164, 170)),
-                );
-            }
-
-            // Sell arm: cumulative chain from anchor.
-            let mut sell_point = self.anchor;
-            let mut sell_nodes = vec![sell_point];
-            for order in &self.orders.asks {
-                let color = egui::Color32::from_rgba_unmultiplied(235, 87, 87, 240);
-
-                let next_point = [
-                    sell_point[0] + order.delta[0],
-                    sell_point[1] + order.delta[1],
-                ];
-
-                ui.line(
-                    Line::new("Ask Orders", PlotPoints::new(vec![sell_point, next_point]))
-                        .color(color)
-                        .width(2.6)
-                        .style(egui_plot::LineStyle::Solid),
-                );
-
-                sell_point = next_point;
-                sell_nodes.push(next_point);
-            }
-            if sell_nodes.len() > 1 {
-                ui.points(
-                    Points::new("Ask Order Nodes", sell_nodes)
-                        .radius(3.2)
-                        .color(egui::Color32::from_rgba_unmultiplied(255, 130, 130, 180)),
-                );
-            }
-        }
-
-        ui.points(
-            Points::new("Anchor (Current Balance)", vec![self.anchor])
-                .radius(6.5)
-                .color(egui::Color32::from_rgb(250, 244, 230)),
-        );
-
-        if let AppMode::Default = self.mode {
-            return;
-        }
-
-        if let Some(mouse_pos) = ui.pointer_coordinate() {
-            let ghost_points = vec![self.anchor, [mouse_pos.x, mouse_pos.y]];
-
-            let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
-                .color(egui::Color32::from_rgba_unmultiplied(240, 240, 255, 170))
-                .width(1.8)
-                .style(egui_plot::LineStyle::Dashed { length: 5.0 });
-
-            ui.line(ghost_line);
-        }
-
-        if ui.response().clicked()
-            && let Some(PlotPoint { x, y }) = ui.pointer_coordinate()
-        {
-            let delta = [x - self.anchor[0], y - self.anchor[1]];
-
-            log::info!("Clicked plot at X: {x}, Y: {y} (Delta: {delta:?})");
-            self.mode = AppMode::Default;
-        }
     }
 }
 
 impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.update();
+        // TODO: We should probably schedule a redraw based on self.time_unit_sec because for low enough
+        // time_unit_sec values the color can change each frame and since egui is lazy it will only update
+        //  on the next event which makes the color jump instead of changing smoothly as it should
         self.handle_keyboard(ui);
         self.render_main_plot(ui);
     }
