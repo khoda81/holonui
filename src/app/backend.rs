@@ -1,7 +1,13 @@
-mod models;
+pub mod models;
 
-use crate::app::backend::models::{ApiFailure, ApiResponse};
-use crate::utils::{get_api_key, sleep_async};
+use super::{
+    BackendEvent,
+    backend::models::{ApiFailure, ApiResponse},
+};
+use crate::{
+    app::plot::OrderFrontier,
+    utils::{get_api_key, sleep_async},
+};
 use models::{OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
@@ -12,12 +18,6 @@ use thiserror::Error;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
-
-pub enum BackendEvent {
-    Trades { trajectory: Vec<super::Trade> },
-    Balances { anchor: super::Allocation },
-    Orders(super::Orders),
-}
 
 #[derive(Error, Debug)]
 pub enum FetchError {
@@ -70,9 +70,7 @@ impl NetworkBackend {
 
             trajectory.extend(page.trades.into_iter().map(Into::into));
 
-            self.send_event(BackendEvent::Trades {
-                trajectory: trajectory.clone(),
-            });
+            self.send_event(BackendEvent::Trades(trajectory.clone()));
 
             if !page.has_next {
                 break;
@@ -108,10 +106,7 @@ impl NetworkBackend {
         bids.sort_by(|a, b| b.price.total_cmp(&a.price)); // descending
         asks.sort_by(|a, b| a.price.total_cmp(&b.price)); // ascending
 
-        self.send_event(BackendEvent::Orders(super::Orders {
-            bids: bids.into_iter().map(Into::into).collect(),
-            asks: asks.into_iter().map(Into::into).collect(),
-        }))
+        self.send_event(BackendEvent::Orders(OrderFrontier::from_sides(bids, asks)))
     }
 
     pub async fn fetch_balances(&self) {
@@ -130,9 +125,7 @@ impl NetworkBackend {
             }
         }
 
-        self.send_event(BackendEvent::Balances {
-            anchor: [current_usdt, current_rls],
-        });
+        self.send_event(BackendEvent::Balances([current_usdt, current_rls]));
     }
 
     async fn fetch_endpoint<T, Q>(&self, endpoint: &str, query: &Q) -> T
@@ -146,7 +139,7 @@ impl NetworkBackend {
             .expect("Invalid hardcoded endpoint");
 
         loop {
-            log::trace!("Sending request for: {}", url);
+            log::trace!("Sending request for: {} (token: {})", url, self.api_key);
 
             let request = self
                 .client

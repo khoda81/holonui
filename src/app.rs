@@ -2,15 +2,17 @@ mod backend;
 mod plot;
 
 use crate::{
-    Allocation,
-    app::{
-        backend::{BackendEvent, NetworkBackend},
-        plot::PlotPanel,
-    },
+    app::{backend::NetworkBackend, plot::ChartState},
     utils::{format_humantime, spawn_local},
 };
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::sync::mpsc::Receiver;
+
+pub enum BackendEvent {
+    Trades(plot::Trajectory),
+    Balances(plot::Allocation),
+    Orders(plot::OrderFrontier),
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 enum AppMode {
@@ -19,29 +21,18 @@ enum AppMode {
     GhostLine,
 }
 
-#[derive(Clone, Debug)]
-struct Trade {
-    delta: [f64; 2],
-    timestamp: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-struct Order {
-    delta: [f64; 2],
-    created_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-struct Orders {
-    bids: Vec<Order>,
-    asks: Vec<Order>,
-}
-
 pub struct HolonApp {
     api_receiver: Receiver<BackendEvent>,
     mode: AppMode,
 
-    plot_panel: plot::PlotPanel,
+    chart: plot::ChartState,
+
+    orders: plot::OrderFrontier,
+    trajectory: plot::Trajectory,
+    anchor: plot::Allocation,
+
+    show_trajectory: bool,
+    show_order_frontier: bool,
 }
 
 impl HolonApp {
@@ -62,16 +53,30 @@ impl HolonApp {
         Self {
             mode: AppMode::Default,
             api_receiver: rx,
-            plot_panel: PlotPanel::new(),
+            chart: ChartState::new(),
+
+            orders: plot::OrderFrontier::default(),
+            trajectory: Vec::new(),
+            anchor: [0.0, 0.0],
+
+            show_trajectory: true,
+            show_order_frontier: true,
         }
     }
 
     pub fn update(&mut self) {
         while let Ok(event) = self.api_receiver.try_recv() {
             match event {
-                BackendEvent::Orders(orders) => self.plot_panel.set_orders(orders),
-                BackendEvent::Trades { trajectory } => self.plot_panel.set_trajectory(trajectory),
-                BackendEvent::Balances { anchor } => self.plot_panel.set_anchor(anchor),
+                BackendEvent::Orders(orders) => {
+                    self.orders = orders;
+                    self.chart.update_bounds();
+                }
+
+                BackendEvent::Trades(trajectory) => self.trajectory = trajectory,
+                BackendEvent::Balances(anchor) => {
+                    self.anchor = anchor;
+                    self.chart.update_bounds();
+                }
             }
         }
     }
@@ -89,36 +94,38 @@ impl HolonApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("HolonUI - Skyline Visualizer");
 
+            let mut time_unit_sec = self.chart.time_unit().as_seconds_f64();
             ui.horizontal(|ui| {
                 ui.label("Time Unit:");
                 ui.add(
-                    egui::Slider::new(&mut self.plot_panel.time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
+                    egui::Slider::new(&mut time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
                         .logarithmic(true)
                         .custom_formatter(|sec, _| format_humantime(sec)),
                 );
             });
+            self.chart
+                .set_time_unit(chrono::Duration::nanoseconds((time_unit_sec * 1e9) as i64));
 
             ui.horizontal(|ui| {
-                ui.checkbox(
-                    &mut self.plot_panel.log_grid_spacing,
-                    "Logarithmic Grid Spacing",
-                );
-                ui.checkbox(
-                    &mut self.plot_panel.positive_only_grid,
-                    "Positive-Only Grid",
-                );
+                ui.checkbox(&mut self.chart.log_grid_spacing, "Logarithmic Grid Spacing");
+                ui.checkbox(&mut self.chart.positive_only_grid, "Positive-Only Grid");
             });
 
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.plot_panel.show_trajectory, "Show Trajectory");
-                ui.checkbox(
-                    &mut self.plot_panel.show_order_frontier,
-                    "Show Order Frontier",
-                );
+                ui.checkbox(&mut self.show_trajectory, "Show Trajectory");
+                ui.checkbox(&mut self.show_order_frontier, "Show Order Frontier");
             });
 
             let now = Utc::now();
-            let response = self.plot_panel.show(ui, self.mode, now);
+            let mut context = plot::PlotContext::new(self.mode, now, &self.anchor);
+            if self.show_trajectory {
+                context.trajectory = &self.trajectory;
+            }
+            if self.show_order_frontier {
+                context.orders = &self.orders;
+            }
+
+            let response = self.chart.show(ui, context);
 
             if let Some(delta) = response.inner.clicked_delta {
                 log::info!("Placed order (Delta: {delta:.2?})");
