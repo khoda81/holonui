@@ -1,18 +1,18 @@
 pub mod models;
 
 use super::{
-    BackendEvent,
     backend::models::{ApiFailure, ApiResponse},
+    plot::OrderFrontier,
 };
 use crate::{
-    app::plot::OrderFrontier,
+    app::plot::{Allocation, Trajectory},
     utils::{get_api_key, sleep_async},
 };
+use futures::channel::mpsc::UnboundedSender;
 use models::{OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::sync::mpsc::Sender;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -48,8 +48,21 @@ pub enum FetchError {
     Parse(serde_json::Error, String),
 }
 
+pub enum BackendCommand {
+    FetchAll,
+    UpdateApiKey(String),
+}
+
+pub enum BackendEvent {
+    Trades(Trajectory),
+    Balances(Allocation),
+    Orders(OrderFrontier),
+    NeedApiKey,
+}
+
 pub struct NetworkBackend {
-    sender: Sender<BackendEvent>,
+    sender: std::sync::mpsc::Sender<BackendEvent>,
+    commands: tokio::sync::mpsc::Receiver<BackendCommand>,
     ctx: egui::Context,
     client: reqwest::Client,
     api_key: String,
@@ -57,14 +70,51 @@ pub struct NetworkBackend {
 }
 
 impl NetworkBackend {
-    pub fn new(sender: Sender<BackendEvent>, ctx: egui::Context) -> Self {
+    pub fn new(
+        sender: std::sync::mpsc::Sender<BackendEvent>,
+        receiver: tokio::sync::mpsc::Receiver<BackendCommand>,
+        ctx: egui::Context,
+    ) -> Self {
         Self {
             sender,
+            commands: receiver,
             ctx,
             client: reqwest::Client::new(),
             api_key: get_api_key().unwrap_or_default(),
             base_url: reqwest::Url::parse(BASE_URL).unwrap(),
         }
+    }
+
+    pub async fn run_backend(&mut self) {
+        // Shared state (e.g., API key, Reqwest client) can be wrapped in Arc
+        // if you need to pass it into spawned tasks.
+        let client = reqwest::Client::new();
+
+        // The main event loop
+        while let Some(cmd) = self.commands.recv().await {
+            match cmd {
+                BackendCommand::FetchAll => {
+                    // SPAWN a lightweight task on the EXISTING runtime
+                    let tx_clone = self.sender.clone();
+                    let client_clone = client.clone();
+
+                    tokio::spawn(async move {
+                        // Do async network request...
+                        // let data = fetch_something(&client_clone).await;
+
+                        // Send sync event back to UI
+                        // tx_clone.send(BackendEvent::Trades(data)).unwrap();
+                    });
+                }
+                BackendCommand::UpdateApiKey(key) => {
+                    // Handle updating API key state
+                }
+            }
+        }
+    }
+
+    pub fn api_key_mut(&mut self) -> &mut String {
+        &mut self.api_key
     }
 
     pub async fn fetch_trajectory(&self) {
@@ -232,7 +282,8 @@ impl NetworkBackend {
     }
 
     fn send_event(&self, event: BackendEvent) {
-        let _ = self.sender.send(event);
-        self.ctx.request_repaint()
+        if self.sender.send(event).is_ok() {
+            self.ctx.request_repaint();
+        }
     }
 }

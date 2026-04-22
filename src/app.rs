@@ -1,19 +1,12 @@
 mod backend;
 mod plot;
 
-use crate::{
-    app::{backend::NetworkBackend, plot::ChartState},
-    utils::{format_humantime, spawn_local},
-};
-use chrono::Utc;
-use std::sync::mpsc::Receiver;
+use backend::{BackendCommand, BackendEvent, NetworkBackend};
+use plot::ChartState;
 
-pub enum BackendEvent {
-    Trades(plot::Trajectory),
-    Balances(plot::Allocation),
-    Orders(plot::OrderFrontier),
-    NeedApiKey,
-}
+use crate::utils::{format_humantime, save_api_key};
+
+use chrono::Utc;
 
 #[derive(Clone, Copy, Debug, Default)]
 enum AppMode {
@@ -22,8 +15,40 @@ enum AppMode {
     GhostLine,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn_background_system(
+    ctx: egui::Context,
+) -> (
+    tokio::sync::mpsc::Sender<BackendCommand>,
+    std::sync::mpsc::Receiver<BackendEvent>,
+) {
+    const COMMAND_BUFFER_SIZE: usize = 32;
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(COMMAND_BUFFER_SIZE);
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+
+    // Spawn ONE dedicated OS thread for the entire networking backend
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let mut backend = NetworkBackend::new(event_tx, cmd_rx, ctx);
+
+        // Block this thread on the main backend loop
+        rt.block_on(async move {
+            backend.run_backend().await;
+        });
+    });
+
+    (cmd_tx, event_rx)
+}
+
 pub struct HolonApp {
-    api_receiver: Receiver<BackendEvent>,
+    backend_commands: tokio::sync::mpsc::Sender<BackendCommand>,
+    backend_events: std::sync::mpsc::Receiver<BackendEvent>,
+
     mode: AppMode,
 
     chart: plot::ChartState,
@@ -34,26 +59,17 @@ pub struct HolonApp {
 
     show_trajectory: bool,
     show_order_frontier: bool,
+
+    show_api_key_dialog: bool,
+    api_key_input: String,
 }
 
 impl HolonApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let ctx_clone = cc.egui_ctx.clone();
-
-        let network_backend = NetworkBackend::new(tx, ctx_clone);
-
-        spawn_local(async move {
-            futures::join!(
-                network_backend.fetch_balances(),
-                network_backend.fetch_trajectory(),
-                network_backend.fetch_orders(),
-            );
-        });
+        let (backend_commands, backend_events) = spawn_background_system(cc.egui_ctx.clone());
 
         Self {
             mode: AppMode::Default,
-            api_receiver: rx,
             chart: ChartState::new(),
 
             orders: plot::OrderFrontier::default(),
@@ -62,11 +78,17 @@ impl HolonApp {
 
             show_trajectory: true,
             show_order_frontier: true,
+
+            show_api_key_dialog: false,
+            api_key_input: String::new(),
+
+            backend_events,
+            backend_commands,
         }
     }
 
     pub fn update(&mut self) {
-        while let Ok(event) = self.api_receiver.try_recv() {
+        while let Ok(event) = self.backend_events.try_recv() {
             match event {
                 BackendEvent::Orders(orders) => {
                     self.orders = orders;
@@ -78,7 +100,7 @@ impl HolonApp {
                     self.anchor = anchor;
                     self.chart.update_bounds();
                 }
-                BackendEvent::NeedApiKey => todo!(),
+                BackendEvent::NeedApiKey => self.show_api_key_dialog = true,
             }
         }
     }
@@ -140,6 +162,24 @@ impl HolonApp {
 impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.update();
+
+        if self.show_api_key_dialog {
+            egui::Window::new("API Key")
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label("Enter your Nobitex API token:");
+                    ui.text_edit_singleline(&mut self.api_key_input);
+
+                    if ui.button("Save").clicked() {
+                        if let Err(err) = save_api_key(&self.api_key_input) {
+                            log::error!("Failed to save api_key: {err}")
+                        }
+                        self.show_api_key_dialog = false;
+                    }
+                });
+        }
+
         // TODO: We should probably schedule a redraw based on self.time_unit_sec because for low enough
         // time_unit_sec values the color can change each frame and since egui is lazy it will only update
         //  on the next event which makes the color jump instead of changing smoothly as it should

@@ -1,38 +1,21 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::thread;
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn spawn_local<F>(future: F) -> thread::JoinHandle<F::Output>
+pub fn spawn_task<F>(future: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
-    // On native, spin up a background thread and a lightweight Tokio runtime
-    std::thread::spawn(move || {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(future)
-    })
+    #[cfg(not(target_arch = "wasm32"))]
+    tokio::spawn(future);
+
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(async move { future.await });
 }
 
-#[cfg(target_arch = "wasm32")]
-pub fn spawn_local<F>(future: F)
-where
-    F: std::future::Future<Output = ()> + 'static,
-{
-    // On web, give the async task to the JavaScript event loop
-    wasm_bindgen_futures::spawn_local(future)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn sleep_async(duration: Duration) {
+    #[cfg(not(target_arch = "wasm32"))]
     tokio::time::sleep(duration).await;
-}
 
-#[cfg(target_arch = "wasm32")]
-pub async fn sleep_async(duration: Duration) {
+    #[cfg(target_arch = "wasm32")]
     // If you add `gloo-timers = { version = "0.3", features = ["futures"] }`:
     gloo_timers::future::sleep(duration).await;
 }
@@ -56,19 +39,24 @@ pub fn format_humantime(sec: f64) -> String {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn get_api_key() -> Option<String> {
-    std::env::var("NOBITEX_API_KEY").ok().or_else(|| {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::var("NOBITEX_API_KEY").ok().or_else(|| {
         log::debug!("Loading key from keyring");
-
         keyring::Entry::new("holonui", "default-user")
             .ok()?
             .get_password()
             .ok()
-    })
+    });
+
+    #[cfg(target_arch = "wasm32")]
+    return std::env::var("NOBITEX_API_KEY").ok().or_else(|| todo!());
 }
 
-#[cfg(target_arch = "wasm32")]
-pub fn get_api_key() -> Option<String> {
-    std::env::var("NOBITEX_API_KEY").ok().or_else(|| todo!())
+pub fn save_api_key(key: &str) -> Result<(), keyring::Error> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return keyring::Entry::new("holonui", "default-user")?.set_password(key);
+
+    #[cfg(target_arch = "wasm32")]
+    todo!()
 }
