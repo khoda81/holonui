@@ -12,6 +12,7 @@ pub enum BackendEvent {
     Trades(plot::Trajectory),
     Balances(plot::Allocation),
     Orders(plot::OrderFrontier),
+    NeedApiKey,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -77,6 +78,7 @@ impl HolonApp {
                     self.anchor = anchor;
                     self.chart.update_bounds();
                 }
+                BackendEvent::NeedApiKey => todo!(),
             }
         }
     }

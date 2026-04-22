@@ -21,6 +21,15 @@ const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Error, Debug)]
 pub enum FetchError {
+    #[error("Unauthorized")]
+    Unauthorized,
+
+    #[error("HTTP error {status}: {body}")]
+    Http {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+
     #[error("Request failed: {0}")]
     Request(reqwest::Error),
 
@@ -139,7 +148,7 @@ impl NetworkBackend {
             .expect("Invalid hardcoded endpoint");
 
         loop {
-            log::trace!("Sending request for: {} (token: {})", url, self.api_key);
+            log::trace!("Sending request for: {url} (token: {})", self.api_key);
 
             let request = self
                 .client
@@ -187,20 +196,29 @@ impl NetworkBackend {
     where
         T: DeserializeOwned,
     {
-        let raw_text = request
-            .send()
-            .await
-            .map_err(FetchError::Request)?
-            .text()
-            .await
-            .map_err(FetchError::Read)?;
+        // TODO: We should probably have some mutex/semaphore to limit concurrent connections
+        let resp = request.send().await.map_err(FetchError::Request)?;
+
+        let status = resp.status();
+        let raw_text = resp.text().await.map_err(FetchError::Read)?;
+
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            self.send_event(BackendEvent::NeedApiKey);
+            return Err(FetchError::Unauthorized);
+        }
+
+        if !status.is_success() {
+            return Err(FetchError::Http {
+                status,
+                body: raw_text,
+            });
+        }
 
         let response: ApiResponse<T> =
-            serde_json::from_str(&raw_text).map_err(|err| FetchError::Parse(err, raw_text))?;
+            serde_json::from_str(&raw_text).map_err(|e| FetchError::Parse(e, raw_text))?;
 
         match response {
             ApiResponse::Ok(data) => Ok(data),
-
             ApiResponse::Failed {
                 message,
                 error,
