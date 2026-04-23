@@ -8,13 +8,13 @@ use crate::{
     app::plot::{Allocation, Trajectory},
     utils::{get_api_key, sleep_async, spawn_task},
 };
-use futures::channel::mpsc::UnboundedSender;
 use models::{OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
@@ -61,40 +61,58 @@ pub enum BackendEvent {
     NeedApiKey,
 }
 
-pub struct NetworkBackend {
-    events: std::sync::mpsc::Sender<BackendEvent>,
-    commands: tokio::sync::mpsc::Receiver<BackendCommand>,
-    ctx: egui::Context,
+/// State that is shared across all tasks and the main backend loop.
+/// Arc lets us share ownership, and RwLock provides safe interior mutability.
+struct BackendState {
+    api_key: RwLock<String>,
     client: reqwest::Client,
     base_url: reqwest::Url,
 }
 
-impl NetworkBackend {
-    pub fn new(
-        events: std::sync::mpsc::Sender<BackendEvent>,
-        commands: tokio::sync::mpsc::Receiver<BackendCommand>,
-        ctx: egui::Context,
-    ) -> Self {
-        Self {
-            events,
-            commands,
-            ctx,
+/// A handle that is cloned and given to each spawned task.
+/// Cloning this is very cheap (just atomic reference count bumps).
+#[derive(Clone)]
+struct RequestContext {
+    state: Arc<BackendState>,
+    events: std::sync::mpsc::Sender<BackendEvent>,
+    ctx: egui::Context,
+}
+
+pub async fn start_backend(
+    ctx: egui::Context,
+    cmd_rx: tokio::sync::mpsc::Receiver<BackendCommand>,
+    event_tx: std::sync::mpsc::Sender<BackendEvent>,
+) {
+    let backend = RequestContext::new(event_tx, ctx);
+    RequestContext::run_backend(&backend, cmd_rx).await;
+}
+
+impl RequestContext {
+    fn new(events: std::sync::mpsc::Sender<BackendEvent>, ctx: egui::Context) -> Self {
+        let shared_state = BackendState {
+            api_key: RwLock::new(get_api_key().unwrap_or_default()),
             client: reqwest::Client::new(),
             base_url: reqwest::Url::parse(BASE_URL).unwrap(),
+        };
+
+        Self {
+            events,
+            ctx,
+            state: Arc::new(shared_state),
         }
     }
 
-    pub async fn run_backend(&mut self) {
+    async fn run_backend(
+        backend: &Self,
+        mut commands: tokio::sync::mpsc::Receiver<BackendCommand>,
+    ) {
         let mut cancel_token = CancellationToken::new();
-        let mut api_token = get_api_key().unwrap_or_default();
 
         // The main event loop
-        while let Some(cmd) = self.commands.recv().await {
+        while let Some(cmd) = commands.recv().await {
             match cmd {
                 BackendCommand::FetchAll => {
-                    let tx_clone = self.events.clone();
-                    let client_clone = self.client.clone();
-                    let ctx_clone = self.ctx.clone();
+                    let task_context = backend.clone();
 
                     spawn_task(async move {
                         // Do async network request...
@@ -107,7 +125,9 @@ impl NetworkBackend {
                 BackendCommand::UpdateApiKey(new_token) => {
                     cancel_token.cancel(); // Kills all pending spawns
                     cancel_token = CancellationToken::new(); // Reset
-                    api_token = new_token;
+
+                    let mut token_ref = backend.state.api_key.write().await;
+                    *token_ref = new_token;
                 }
             }
         }
@@ -189,18 +209,21 @@ impl NetworkBackend {
         Q: serde::Serialize + ?Sized,
     {
         let url: Url = self
+            .state
             .base_url
             .join(endpoint)
             .expect("Invalid hardcoded endpoint");
 
         loop {
-            log::trace!("Sending request for: {url} (token: {})", self.api_key);
+            log::trace!(
+                "Sending request for: {url} (token: {})",
+                self.state.api_key.read().await
+            );
 
-            let request = self
-                .client
-                .get(url.clone())
-                .query(query)
-                .header("Authorization", format!("Token {}", self.api_key));
+            let request = self.state.client.get(url.clone()).query(query).header(
+                "Authorization",
+                format!("Token {}", self.state.api_key.read().await),
+            );
 
             let err = match self.send_request(request).await {
                 Ok(res) => {

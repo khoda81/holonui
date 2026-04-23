@@ -1,7 +1,7 @@
 mod backend;
 mod plot;
 
-use backend::{BackendCommand, BackendEvent, NetworkBackend};
+use backend::{BackendCommand, BackendEvent};
 use plot::ChartState;
 
 use crate::utils::format_humantime;
@@ -29,27 +29,20 @@ pub fn spawn_background_system(
     // Spawn ONE dedicated OS thread for the entire networking backend
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        // Block this thread on the main backend loop
+
+        use crate::app::backend::start_backend;
+        tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .unwrap();
-
-        let mut backend = NetworkBackend::new(event_tx, cmd_rx, ctx);
-
-        // Block this thread on the main backend loop
-        rt.block_on(async move {
-            backend.run_backend().await;
-        });
+            .unwrap()
+            .block_on(start_backend(ctx, cmd_rx, event_tx));
     });
 
     // In WASM, we just toss the entire background loop onto the JS event loop.
     // It will yield execution at every `.await`, so it won't freeze the UI.
     #[cfg(target_arch = "wasm32")]
-    wasm_bindgen_futures::spawn_local(async move {
-        let mut backend = NetworkBackend::new(event_tx, cmd_rx, ctx);
-
-        backend.run_backend().await
-    });
+    wasm_bindgen_futures::spawn_local(start_backend(ctx, cmd_rx, event_tx));
 
     (cmd_tx, event_rx)
 }
