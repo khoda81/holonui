@@ -3,6 +3,7 @@ mod plot;
 
 use backend::{BackendCommand, BackendEvent, start_backend};
 use plot::ChartState;
+use tokio::sync::mpsc::error::TrySendError;
 
 use crate::utils::format_humantime;
 
@@ -108,7 +109,10 @@ impl HolonApp {
                     self.chart.update_bounds();
                 }
 
-                BackendEvent::NeedApiKey => self.show_api_key_dialog = true,
+                BackendEvent::NeedApiKey => {
+                    let _ = self.backend_commands.try_send(BackendCommand::CancelAll);
+                    self.show_api_key_dialog = true
+                }
             }
         }
     }
@@ -165,6 +169,15 @@ impl HolonApp {
             }
         });
     }
+
+    fn set_backend_token(&self, token: String) -> Result<(), TrySendError<BackendCommand>> {
+        self.backend_commands
+            .try_send(BackendCommand::UpdateApiKey(token))?;
+
+        self.backend_commands.try_send(BackendCommand::FetchAll)?;
+
+        Ok(())
+    }
 }
 
 impl eframe::App for HolonApp {
@@ -173,7 +186,7 @@ impl eframe::App for HolonApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         if self.show_api_key_dialog {
-            pub fn save_api_key(key: &str) -> Result<(), keyring::Error> {
+            fn save_api_key(key: &str) -> Result<(), keyring::Error> {
                 keyring::Entry::new("holonui", "default-user")?.set_password(key)
             }
 
@@ -188,10 +201,8 @@ impl eframe::App for HolonApp {
                         if let Err(err) = save_api_key(&self.api_key_input) {
                             log::error!("Failed to save api_key: {err}")
                         }
-                        if let Err(err) = self
-                            .backend_commands
-                            .try_send(BackendCommand::UpdateApiKey(self.api_key_input.clone()))
-                        {
+
+                        if let Err(err) = self.set_backend_token(self.api_key_input.clone()) {
                             log::error!("Failed to send update api key command to backend: {err}")
                         }
 

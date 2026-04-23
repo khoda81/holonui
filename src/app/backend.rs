@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
-use tokio::{join, sync::RwLock};
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
@@ -51,6 +51,7 @@ pub enum FetchError {
 
 pub enum BackendCommand {
     FetchAll,
+    CancelAll,
     #[cfg(not(target_arch = "wasm32"))]
     UpdateApiKey(String),
 }
@@ -95,19 +96,56 @@ pub async fn start_backend(
     while let Some(cmd) = commands.recv().await {
         match cmd {
             BackendCommand::FetchAll => {
-                let context = RequestContext {
-                    events: events.clone(),
-                    ctx: ctx.clone(),
-                    state: state.clone(),
-                };
+                {
+                    let context = RequestContext {
+                        events: events.clone(),
+                        state: state.clone(),
+                        ctx: ctx.clone(),
+                    };
 
-                spawn_task(async move {
-                    join!(
-                        context.fetch_balances(),
-                        context.fetch_orders(),
-                        context.fetch_trajectory()
-                    );
-                });
+                    let cancel_token = cancel_token.clone();
+
+                    spawn_task(async move {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => { /* Aborted */ }
+                            _ = context.fetch_balances() => {               }
+                        }
+                    });
+                }
+
+                {
+                    let context = RequestContext {
+                        events: events.clone(),
+                        state: state.clone(),
+                        ctx: ctx.clone(),
+                    };
+
+                    let cancel_token = cancel_token.clone();
+
+                    spawn_task(async move {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => { /* Aborted */ }
+                            _ = context.fetch_orders() => {               }
+                        }
+                    });
+                }
+
+                {
+                    let context = RequestContext {
+                        events: events.clone(),
+                        state: state.clone(),
+                        ctx: ctx.clone(),
+                    };
+
+                    let cancel_token = cancel_token.clone();
+
+                    spawn_task(async move {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => { /* Aborted */ }
+                            _ = context.fetch_trajectory() => {               }
+                        }
+                    });
+                }
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -117,6 +155,11 @@ pub async fn start_backend(
 
                 let mut token_ref = state.api_key.write().await;
                 *token_ref = new_token;
+            }
+
+            BackendCommand::CancelAll => {
+                cancel_token.cancel();
+                cancel_token = CancellationToken::new();
             }
         }
     }
@@ -205,10 +248,7 @@ impl RequestContext {
             .expect("Invalid hardcoded endpoint");
 
         loop {
-            log::trace!(
-                "Sending request for: {url} (token: {})",
-                self.state.api_key.read().await
-            );
+            log::trace!("Sending request for: {url}");
 
             let request = self.state.client.get(url.clone()).query(query).header(
                 "Authorization",
