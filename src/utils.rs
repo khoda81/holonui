@@ -1,14 +1,19 @@
 use std::time::Duration;
-
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_task<F>(future: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
-    #[cfg(not(target_arch = "wasm32"))]
     tokio::spawn(future);
+}
 
-    #[cfg(target_arch = "wasm32")]
-    wasm_bindgen_futures::spawn_local(async move { future.await });
+#[cfg(target_arch = "wasm32")]
+pub fn spawn_task<F>(future: F)
+where
+    // Notice `Send` is completely removed here
+    F: std::future::Future<Output = ()> + 'static,
+{
+    wasm_bindgen_futures::spawn_local(future);
 }
 
 pub async fn sleep_async(duration: Duration) {

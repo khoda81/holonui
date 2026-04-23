@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::{join, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
@@ -51,6 +51,7 @@ pub enum FetchError {
 
 pub enum BackendCommand {
     FetchAll,
+    #[cfg(not(target_arch = "wasm32"))]
     UpdateApiKey(String),
 }
 
@@ -80,59 +81,48 @@ struct RequestContext {
 
 pub async fn start_backend(
     ctx: egui::Context,
-    cmd_rx: tokio::sync::mpsc::Receiver<BackendCommand>,
-    event_tx: std::sync::mpsc::Sender<BackendEvent>,
+    mut commands: tokio::sync::mpsc::Receiver<BackendCommand>,
+    events: std::sync::mpsc::Sender<BackendEvent>,
 ) {
-    let backend = RequestContext::new(event_tx, ctx);
-    RequestContext::run_backend(&backend, cmd_rx).await;
-}
+    let state = Arc::new(BackendState {
+        api_key: RwLock::new(get_api_key().unwrap_or_default()),
+        client: reqwest::Client::new(),
+        base_url: reqwest::Url::parse(BASE_URL).unwrap(),
+    });
 
-impl RequestContext {
-    fn new(events: std::sync::mpsc::Sender<BackendEvent>, ctx: egui::Context) -> Self {
-        let shared_state = BackendState {
-            api_key: RwLock::new(get_api_key().unwrap_or_default()),
-            client: reqwest::Client::new(),
-            base_url: reqwest::Url::parse(BASE_URL).unwrap(),
-        };
+    let mut cancel_token = CancellationToken::new();
 
-        Self {
-            events,
-            ctx,
-            state: Arc::new(shared_state),
-        }
-    }
+    while let Some(cmd) = commands.recv().await {
+        match cmd {
+            BackendCommand::FetchAll => {
+                let context = RequestContext {
+                    events: events.clone(),
+                    ctx: ctx.clone(),
+                    state: state.clone(),
+                };
 
-    async fn run_backend(
-        backend: &Self,
-        mut commands: tokio::sync::mpsc::Receiver<BackendCommand>,
-    ) {
-        let mut cancel_token = CancellationToken::new();
+                spawn_task(async move {
+                    join!(
+                        context.fetch_balances(),
+                        context.fetch_orders(),
+                        context.fetch_trajectory()
+                    );
+                });
+            }
 
-        // The main event loop
-        while let Some(cmd) = commands.recv().await {
-            match cmd {
-                BackendCommand::FetchAll => {
-                    let task_context = backend.clone();
+            #[cfg(not(target_arch = "wasm32"))]
+            BackendCommand::UpdateApiKey(new_token) => {
+                cancel_token.cancel(); // Kills all pending spawns
+                cancel_token = CancellationToken::new(); // Reset
 
-                    spawn_task(async move {
-                        // Do async network request...
-                        // let data = fetch_something(&client_clone).await;
-
-                        // Send sync event back to UI
-                        // tx_clone.send(BackendEvent::Trades(data)).unwrap();
-                    });
-                }
-                BackendCommand::UpdateApiKey(new_token) => {
-                    cancel_token.cancel(); // Kills all pending spawns
-                    cancel_token = CancellationToken::new(); // Reset
-
-                    let mut token_ref = backend.state.api_key.write().await;
-                    *token_ref = new_token;
-                }
+                let mut token_ref = state.api_key.write().await;
+                *token_ref = new_token;
             }
         }
     }
+}
 
+impl RequestContext {
     async fn fetch_trajectory(&self) {
         let mut query = HashMap::new();
         query.insert("srcCurrency", "usdt".to_string());

@@ -1,7 +1,7 @@
 mod backend;
 mod plot;
 
-use backend::{BackendCommand, BackendEvent};
+use backend::{BackendCommand, BackendEvent, start_backend};
 use plot::ChartState;
 
 use crate::utils::format_humantime;
@@ -31,7 +31,6 @@ pub fn spawn_background_system(
     std::thread::spawn(move || {
         // Block this thread on the main backend loop
 
-        use crate::app::backend::start_backend;
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -63,12 +62,17 @@ pub struct HolonApp {
     show_order_frontier: bool,
 
     show_api_key_dialog: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     api_key_input: String,
 }
 
 impl HolonApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (backend_commands, backend_events) = spawn_background_system(cc.egui_ctx.clone());
+
+        if let Err(err) = backend_commands.try_send(BackendCommand::FetchAll) {
+            log::error!("Failed to send fetch all command to network backend: {err}")
+        }
 
         Self {
             mode: AppMode::Default,
@@ -82,6 +86,7 @@ impl HolonApp {
             show_order_frontier: true,
 
             show_api_key_dialog: false,
+            #[cfg(not(target_arch = "wasm32"))]
             api_key_input: String::new(),
 
             backend_events,
@@ -102,6 +107,7 @@ impl HolonApp {
                     self.anchor = anchor;
                     self.chart.update_bounds();
                 }
+
                 BackendEvent::NeedApiKey => self.show_api_key_dialog = true,
             }
         }
@@ -182,6 +188,13 @@ impl eframe::App for HolonApp {
                         if let Err(err) = save_api_key(&self.api_key_input) {
                             log::error!("Failed to save api_key: {err}")
                         }
+                        if let Err(err) = self
+                            .backend_commands
+                            .try_send(BackendCommand::UpdateApiKey(self.api_key_input.clone()))
+                        {
+                            log::error!("Failed to send update api key command to backend: {err}")
+                        }
+
                         self.show_api_key_dialog = false;
                     }
                 });
