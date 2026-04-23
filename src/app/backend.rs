@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     app::plot::{Allocation, Trajectory},
-    utils::{get_api_key, sleep_async},
+    utils::{get_api_key, sleep_async, spawn_task},
 };
 use futures::channel::mpsc::UnboundedSender;
 use models::{OrderPage, TradesPage, WalletsResponse};
@@ -15,6 +15,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -61,44 +62,41 @@ pub enum BackendEvent {
 }
 
 pub struct NetworkBackend {
-    sender: std::sync::mpsc::Sender<BackendEvent>,
+    events: std::sync::mpsc::Sender<BackendEvent>,
     commands: tokio::sync::mpsc::Receiver<BackendCommand>,
     ctx: egui::Context,
     client: reqwest::Client,
-    api_key: String,
     base_url: reqwest::Url,
 }
 
 impl NetworkBackend {
     pub fn new(
-        sender: std::sync::mpsc::Sender<BackendEvent>,
-        receiver: tokio::sync::mpsc::Receiver<BackendCommand>,
+        events: std::sync::mpsc::Sender<BackendEvent>,
+        commands: tokio::sync::mpsc::Receiver<BackendCommand>,
         ctx: egui::Context,
     ) -> Self {
         Self {
-            sender,
-            commands: receiver,
+            events,
+            commands,
             ctx,
             client: reqwest::Client::new(),
-            api_key: get_api_key().unwrap_or_default(),
             base_url: reqwest::Url::parse(BASE_URL).unwrap(),
         }
     }
 
     pub async fn run_backend(&mut self) {
-        // Shared state (e.g., API key, Reqwest client) can be wrapped in Arc
-        // if you need to pass it into spawned tasks.
-        let client = reqwest::Client::new();
+        let mut cancel_token = CancellationToken::new();
+        let mut api_token = get_api_key().unwrap_or_default();
 
         // The main event loop
         while let Some(cmd) = self.commands.recv().await {
             match cmd {
                 BackendCommand::FetchAll => {
-                    // SPAWN a lightweight task on the EXISTING runtime
-                    let tx_clone = self.sender.clone();
-                    let client_clone = client.clone();
+                    let tx_clone = self.events.clone();
+                    let client_clone = self.client.clone();
+                    let ctx_clone = self.ctx.clone();
 
-                    tokio::spawn(async move {
+                    spawn_task(async move {
                         // Do async network request...
                         // let data = fetch_something(&client_clone).await;
 
@@ -106,18 +104,16 @@ impl NetworkBackend {
                         // tx_clone.send(BackendEvent::Trades(data)).unwrap();
                     });
                 }
-                BackendCommand::UpdateApiKey(key) => {
-                    // Handle updating API key state
+                BackendCommand::UpdateApiKey(new_token) => {
+                    cancel_token.cancel(); // Kills all pending spawns
+                    cancel_token = CancellationToken::new(); // Reset
+                    api_token = new_token;
                 }
             }
         }
     }
 
-    pub fn api_key_mut(&mut self) -> &mut String {
-        &mut self.api_key
-    }
-
-    pub async fn fetch_trajectory(&self) {
+    async fn fetch_trajectory(&self) {
         let mut query = HashMap::new();
         query.insert("srcCurrency", "usdt".to_string());
         query.insert("dstCurrency", "rls".to_string());
@@ -137,7 +133,7 @@ impl NetworkBackend {
         }
     }
 
-    pub async fn fetch_orders(&self) {
+    async fn fetch_orders(&self) {
         let mut bids = Vec::new();
         let mut asks = Vec::new();
         let mut query = HashMap::new();
@@ -168,7 +164,7 @@ impl NetworkBackend {
         self.send_event(BackendEvent::Orders(OrderFrontier::from_sides(bids, asks)))
     }
 
-    pub async fn fetch_balances(&self) {
+    async fn fetch_balances(&self) {
         let response: WalletsResponse = self
             .fetch_endpoint("users/wallets/list", &[] as &[(&str, &str)])
             .await;
@@ -282,7 +278,7 @@ impl NetworkBackend {
     }
 
     fn send_event(&self, event: BackendEvent) {
-        if self.sender.send(event).is_ok() {
+        if self.events.send(event).is_ok() {
             self.ctx.request_repaint();
         }
     }

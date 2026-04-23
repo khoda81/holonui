@@ -52,11 +52,3 @@ pub fn get_api_key() -> Option<String> {
     #[cfg(target_arch = "wasm32")]
     return std::env::var("NOBITEX_API_KEY").ok().or_else(|| todo!());
 }
-
-pub fn save_api_key(key: &str) -> Result<(), keyring::Error> {
-    #[cfg(not(target_arch = "wasm32"))]
-    return keyring::Entry::new("holonui", "default-user")?.set_password(key);
-
-    #[cfg(target_arch = "wasm32")]
-    todo!()
-}

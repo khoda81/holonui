@@ -4,7 +4,7 @@ mod plot;
 use backend::{BackendCommand, BackendEvent, NetworkBackend};
 use plot::ChartState;
 
-use crate::utils::{format_humantime, save_api_key};
+use crate::utils::format_humantime;
 
 use chrono::Utc;
 
@@ -15,7 +15,6 @@ enum AppMode {
     GhostLine,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_background_system(
     ctx: egui::Context,
 ) -> (
@@ -28,6 +27,7 @@ pub fn spawn_background_system(
     let (event_tx, event_rx) = std::sync::mpsc::channel();
 
     // Spawn ONE dedicated OS thread for the entire networking backend
+    #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -40,6 +40,15 @@ pub fn spawn_background_system(
         rt.block_on(async move {
             backend.run_backend().await;
         });
+    });
+
+    // In WASM, we just toss the entire background loop onto the JS event loop.
+    // It will yield execution at every `.await`, so it won't freeze the UI.
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut backend = NetworkBackend::new(event_tx, cmd_rx, ctx);
+
+        backend.run_backend().await
     });
 
     (cmd_tx, event_rx)
@@ -163,7 +172,12 @@ impl eframe::App for HolonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.update();
 
+        #[cfg(not(target_arch = "wasm32"))]
         if self.show_api_key_dialog {
+            pub fn save_api_key(key: &str) -> Result<(), keyring::Error> {
+                keyring::Entry::new("holonui", "default-user")?.set_password(key)
+            }
+
             egui::Window::new("API Key")
                 .collapsible(false)
                 .resizable(false)
