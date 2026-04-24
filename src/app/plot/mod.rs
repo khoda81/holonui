@@ -113,11 +113,14 @@ impl<'f> PlotContext<'f> {
 }
 
 impl PlotContext<'_> {
+    // TODO: When there is no orders, the anchor should be in the middle of the screen
+    // TODO: The x=0, y=0 in linear spacing mode should be the bottom (no bottom or left padding)
+    // TODO: In logarithmic coordinate, the min order coordinates + some padding should be the low x and low y bounds
     fn order_frontier_bounds(&self) -> PlotBounds {
         let mut bounds = PlotBounds::NOTHING;
 
         bounds.extend_with(&PlotPoint::from(*self.anchor));
-        bounds.extend_with(&PlotPoint::new(0.0, 0.0));
+        // bounds.extend_with(&PlotPoint::new(0.0, 0.0));
 
         let mut buy_point = *self.anchor;
         for order in &self.orders.bids {
@@ -212,6 +215,8 @@ impl ChartState {
         ui: &mut egui_plot::PlotUi<'_>,
         ctx: PlotContext<'_>,
     ) -> PlotPanelResponse {
+        // TODO: Implement logarithmic coordinates
+        // TODO: The numbers should be human readable formatted instead of 80000000 we should have 80M
         // TODO: Draw the budget line passing through anchor, highlighted point
 
         // TODO: Can we label the axis with the currency name?
