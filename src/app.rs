@@ -5,9 +5,7 @@ use crate::utils::format_humantime;
 use backend::{BackendCommand, BackendEvent, start_backend};
 use chrono::Utc;
 use plot::ChartState;
-use tokio::sync::mpsc::{
-    Receiver as TokioReceiver, Sender as TokioSender, channel as tokio_channel, error::TrySendError,
-};
+use tokio::sync::mpsc::{self as tmpsc, error::TrySendError};
 
 #[derive(Clone, Copy, Debug, Default)]
 enum AppMode {
@@ -17,8 +15,8 @@ enum AppMode {
 }
 
 pub struct HolonApp {
-    backend_commands: TokioSender<BackendCommand>,
-    backend_events: TokioReceiver<BackendEvent>,
+    backend_commands: tmpsc::UnboundedSender<BackendCommand>,
+    backend_events: tmpsc::Receiver<BackendEvent>,
 
     mode: AppMode,
 
@@ -40,8 +38,8 @@ impl HolonApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         const COMMAND_BUFFER_SIZE: usize = 32;
 
-        let (cmd_tx, cmd_rx) = tokio_channel(COMMAND_BUFFER_SIZE);
-        let (event_tx, event_rx) = tokio_channel(COMMAND_BUFFER_SIZE);
+        let (cmd_tx, cmd_rx) = tmpsc::unbounded_channel();
+        let (event_tx, event_rx) = tmpsc::channel(COMMAND_BUFFER_SIZE);
 
         let ctx = cc.egui_ctx.clone();
         // Spawn ONE dedicated OS thread for the entire networking backend
@@ -61,7 +59,7 @@ impl HolonApp {
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(start_backend(ctx, cmd_rx, event_tx));
 
-        if let Err(err) = cmd_tx.blocking_send(BackendCommand::FetchAll) {
+        if let Err(err) = cmd_tx.send(BackendCommand::FetchAll) {
             log::error!("Failed to send fetch all command to network backend: {err}")
         }
 
@@ -100,7 +98,7 @@ impl HolonApp {
                 }
 
                 BackendEvent::NeedApiKey => {
-                    let _ = self.backend_commands.try_send(BackendCommand::CancelAll);
+                    let _ = self.backend_commands.send(BackendCommand::CancelAll);
                     self.show_api_key_dialog = true
                 }
             }
@@ -162,9 +160,9 @@ impl HolonApp {
 
     fn set_backend_token(&self, token: String) -> Result<(), TrySendError<BackendCommand>> {
         self.backend_commands
-            .try_send(BackendCommand::UpdateApiKey(token))?;
+            .send(BackendCommand::UpdateApiKey(token))?;
 
-        self.backend_commands.try_send(BackendCommand::FetchAll)?;
+        self.backend_commands.send(BackendCommand::FetchAll)?;
 
         Ok(())
     }
