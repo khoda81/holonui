@@ -82,6 +82,13 @@ struct RequestContext {
     ctx: egui::Context,
 }
 
+async fn cancelable<F: Future>(f: F, cancel_token: CancellationToken) {
+    tokio::select! {
+        _ = cancel_token.cancelled() => {  }
+        _ = f => {  }
+    }
+}
+
 pub async fn start_backend(
     ctx: egui::Context,
     mut commands: tmpsc::UnboundedReceiver<BackendCommand>,
@@ -95,60 +102,23 @@ pub async fn start_backend(
 
     let mut cancel_token = CancellationToken::new();
 
+    let context = RequestContext { events, state, ctx };
+
     while let Some(cmd) = commands.recv().await {
         match cmd {
             BackendCommand::FetchAll => {
-                // TODO: This needs some cleanup...
-                {
-                    let context = RequestContext {
-                        events: events.clone(),
-                        state: state.clone(),
-                        ctx: ctx.clone(),
-                    };
-
-                    let cancel_token = cancel_token.clone();
-
-                    spawn_task(async move {
-                        tokio::select! {
-                            _ = cancel_token.cancelled() => { /* Aborted */ }
-                            _ = context.fetch_balances() => {               }
-                        }
-                    });
-                }
-
-                {
-                    let context = RequestContext {
-                        events: events.clone(),
-                        state: state.clone(),
-                        ctx: ctx.clone(),
-                    };
-
-                    let cancel_token = cancel_token.clone();
-
-                    spawn_task(async move {
-                        tokio::select! {
-                            _ = cancel_token.cancelled() => { /* Aborted */ }
-                            _ = context.fetch_orders() => {               }
-                        }
-                    });
-                }
-
-                {
-                    let context = RequestContext {
-                        events: events.clone(),
-                        state: state.clone(),
-                        ctx: ctx.clone(),
-                    };
-
-                    let cancel_token = cancel_token.clone();
-
-                    spawn_task(async move {
-                        tokio::select! {
-                            _ = cancel_token.cancelled() => { /* Aborted */ }
-                            _ = context.fetch_trajectory() => {               }
-                        }
-                    });
-                }
+                spawn_task(cancelable(
+                    context.clone().fetch_balances(),
+                    cancel_token.clone(),
+                ));
+                spawn_task(cancelable(
+                    context.clone().fetch_orders(),
+                    cancel_token.clone(),
+                ));
+                spawn_task(cancelable(
+                    context.clone().fetch_trajectory(),
+                    cancel_token.clone(),
+                ));
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -156,7 +126,7 @@ pub async fn start_backend(
                 cancel_token.cancel(); // Kills all pending spawns
                 cancel_token = CancellationToken::new(); // Reset
 
-                let mut token_ref = state.api_key.write().await;
+                let mut token_ref = context.state.api_key.write().await;
                 *token_ref = new_token;
             }
 
@@ -169,7 +139,7 @@ pub async fn start_backend(
 }
 
 impl RequestContext {
-    async fn fetch_trajectory(&self) {
+    async fn fetch_trajectory(self) {
         let mut query = HashMap::new();
         query.insert("srcCurrency", X.to_string());
         query.insert("dstCurrency", Y.to_string());
@@ -190,7 +160,7 @@ impl RequestContext {
         }
     }
 
-    async fn fetch_orders(&self) {
+    async fn fetch_orders(self) {
         let mut bids = Vec::new();
         let mut asks = Vec::new();
         let mut query = HashMap::new();
@@ -222,7 +192,7 @@ impl RequestContext {
             .await
     }
 
-    async fn fetch_balances(&self) {
+    async fn fetch_balances(self) {
         let response: WalletsResponse = self
             .fetch_endpoint("users/wallets/list", &[] as &[(&str, &str)])
             .await;
