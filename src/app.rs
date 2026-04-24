@@ -5,8 +5,9 @@ use crate::utils::format_humantime;
 use backend::{BackendCommand, BackendEvent, start_backend};
 use chrono::Utc;
 use plot::ChartState;
-use std::sync::mpsc;
-use tokio::sync::mpsc::{Sender as TokioSender, channel as tokio_channel, error::TrySendError};
+use tokio::sync::mpsc::{
+    Receiver as TokioReceiver, Sender as TokioSender, channel as tokio_channel, error::TrySendError,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 enum AppMode {
@@ -17,7 +18,7 @@ enum AppMode {
 
 pub struct HolonApp {
     backend_commands: TokioSender<BackendCommand>,
-    backend_events: mpsc::Receiver<BackendEvent>,
+    backend_events: TokioReceiver<BackendEvent>,
 
     mode: AppMode,
 
@@ -40,7 +41,7 @@ impl HolonApp {
         const COMMAND_BUFFER_SIZE: usize = 32;
 
         let (cmd_tx, cmd_rx) = tokio_channel(COMMAND_BUFFER_SIZE);
-        let (event_tx, event_rx) = mpsc::channel();
+        let (event_tx, event_rx) = tokio_channel(COMMAND_BUFFER_SIZE);
 
         let ctx = cc.egui_ctx.clone();
         // Spawn ONE dedicated OS thread for the entire networking backend
@@ -60,7 +61,7 @@ impl HolonApp {
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(start_backend(ctx, cmd_rx, event_tx));
 
-        if let Err(err) = cmd_tx.try_send(BackendCommand::FetchAll) {
+        if let Err(err) = cmd_tx.blocking_send(BackendCommand::FetchAll) {
             log::error!("Failed to send fetch all command to network backend: {err}")
         }
 

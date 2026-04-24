@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use std::{collections::HashMap, sync::Arc};
 use std::{sync::mpsc, time::Duration};
 use thiserror::Error;
-use tokio::sync::{RwLock, mpsc::Receiver as TokioReceiver};
+use tokio::sync::{RwLock, mpsc::Receiver as TokioReceiver, mpsc::Sender as TokioSender};
 use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
@@ -76,14 +76,14 @@ struct BackendState {
 #[derive(Clone)]
 struct RequestContext {
     state: Arc<BackendState>,
-    events: mpsc::Sender<BackendEvent>,
+    events: TokioSender<BackendEvent>,
     ctx: egui::Context,
 }
 
 pub async fn start_backend(
     ctx: egui::Context,
     mut commands: TokioReceiver<BackendCommand>,
-    events: mpsc::Sender<BackendEvent>,
+    events: TokioSender<BackendEvent>,
 ) {
     let state = Arc::new(BackendState {
         api_key: RwLock::new(get_api_key().unwrap_or_default()),
@@ -178,7 +178,8 @@ impl RequestContext {
 
             trajectory.extend(page.trades.into_iter().map(Into::into));
 
-            self.send_event(BackendEvent::Trades(trajectory.clone()));
+            self.send_event(BackendEvent::Trades(trajectory.clone()))
+                .await;
 
             if !page.has_next {
                 break;
@@ -215,6 +216,7 @@ impl RequestContext {
         asks.sort_by(|a, b| a.price.total_cmp(&b.price)); // ascending
 
         self.send_event(BackendEvent::Orders(OrderFrontier::from_sides(bids, asks)))
+            .await
     }
 
     async fn fetch_balances(&self) {
@@ -233,7 +235,8 @@ impl RequestContext {
             }
         }
 
-        self.send_event(BackendEvent::Balances([current_usdt, current_rls]));
+        self.send_event(BackendEvent::Balances([current_usdt, current_rls]))
+            .await;
     }
 
     async fn fetch_endpoint<T, Q>(&self, endpoint: &str, query: &Q) -> T
@@ -302,7 +305,7 @@ impl RequestContext {
         let raw_text = resp.text().await.map_err(FetchError::Read)?;
 
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            self.send_event(BackendEvent::NeedApiKey);
+            self.send_event(BackendEvent::NeedApiKey).await;
             return Err(FetchError::Unauthorized);
         }
 
@@ -330,9 +333,11 @@ impl RequestContext {
         }
     }
 
-    fn send_event(&self, event: BackendEvent) {
-        if self.events.send(event).is_ok() {
-            self.ctx.request_repaint();
-        }
+    async fn send_event(&self, event: BackendEvent) {
+        self.events
+            .send(event)
+            .await
+            .is_ok()
+            .then(|| self.ctx.request_repaint());
     }
 }
