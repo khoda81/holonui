@@ -18,6 +18,8 @@ use tokio::sync::{RwLock, mpsc as tmpsc};
 use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
+const X: &str = "usdt";
+const Y: &str = "rls";
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Error, Debug)]
@@ -169,8 +171,8 @@ pub async fn start_backend(
 impl RequestContext {
     async fn fetch_trajectory(&self) {
         let mut query = HashMap::new();
-        query.insert("srcCurrency", "usdt".to_string());
-        query.insert("dstCurrency", "rls".to_string());
+        query.insert("srcCurrency", X.to_string());
+        query.insert("dstCurrency", Y.to_string());
 
         let mut trajectory = Vec::new();
         for page in 1.. {
@@ -193,8 +195,8 @@ impl RequestContext {
         let mut asks = Vec::new();
         let mut query = HashMap::new();
 
-        query.insert("srcCurrency", "usdt".to_string());
-        query.insert("dstCurrency", "rls".to_string());
+        query.insert("srcCurrency", X.to_string());
+        query.insert("dstCurrency", Y.to_string());
         query.insert("details", "2".to_string());
 
         for page in 1.. {
@@ -229,9 +231,9 @@ impl RequestContext {
         let mut current_rls = 0.0;
 
         for wallet in response.wallets {
-            if wallet.currency == "usdt" {
+            if wallet.currency == X {
                 current_usdt = wallet.balance;
-            } else if wallet.currency == "rls" {
+            } else if wallet.currency == Y {
                 current_rls = wallet.balance;
             }
         }
