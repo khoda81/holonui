@@ -11,10 +11,10 @@ use crate::{
 use models::{OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
-use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
+use std::{sync::mpsc, time::Duration};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc::Receiver as TokioReceiver};
 use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
@@ -76,14 +76,14 @@ struct BackendState {
 #[derive(Clone)]
 struct RequestContext {
     state: Arc<BackendState>,
-    events: std::sync::mpsc::Sender<BackendEvent>,
+    events: mpsc::Sender<BackendEvent>,
     ctx: egui::Context,
 }
 
 pub async fn start_backend(
     ctx: egui::Context,
-    mut commands: tokio::sync::mpsc::Receiver<BackendCommand>,
-    events: std::sync::mpsc::Sender<BackendEvent>,
+    mut commands: TokioReceiver<BackendCommand>,
+    events: mpsc::Sender<BackendEvent>,
 ) {
     let state = Arc::new(BackendState {
         api_key: RwLock::new(get_api_key().unwrap_or_default()),

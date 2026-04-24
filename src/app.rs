@@ -1,13 +1,12 @@
 mod backend;
 mod plot;
 
-use backend::{BackendCommand, BackendEvent, start_backend};
-use plot::ChartState;
-use tokio::sync::mpsc::error::TrySendError;
-
 use crate::utils::format_humantime;
-
+use backend::{BackendCommand, BackendEvent, start_backend};
 use chrono::Utc;
+use plot::ChartState;
+use std::sync::mpsc;
+use tokio::sync::mpsc::{Sender as TokioSender, channel as tokio_channel, error::TrySendError};
 
 #[derive(Clone, Copy, Debug, Default)]
 enum AppMode {
@@ -16,40 +15,9 @@ enum AppMode {
     GhostLine,
 }
 
-pub fn spawn_background_system(
-    ctx: egui::Context,
-) -> (
-    tokio::sync::mpsc::Sender<BackendCommand>,
-    std::sync::mpsc::Receiver<BackendEvent>,
-) {
-    const COMMAND_BUFFER_SIZE: usize = 32;
-
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(COMMAND_BUFFER_SIZE);
-    let (event_tx, event_rx) = std::sync::mpsc::channel();
-
-    // Spawn ONE dedicated OS thread for the entire networking backend
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(move || {
-        // Block this thread on the main backend loop
-
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(start_backend(ctx, cmd_rx, event_tx));
-    });
-
-    // In WASM, we just toss the entire background loop onto the JS event loop.
-    // It will yield execution at every `.await`, so it won't freeze the UI.
-    #[cfg(target_arch = "wasm32")]
-    wasm_bindgen_futures::spawn_local(start_backend(ctx, cmd_rx, event_tx));
-
-    (cmd_tx, event_rx)
-}
-
 pub struct HolonApp {
-    backend_commands: tokio::sync::mpsc::Sender<BackendCommand>,
-    backend_events: std::sync::mpsc::Receiver<BackendEvent>,
+    backend_commands: TokioSender<BackendCommand>,
+    backend_events: mpsc::Receiver<BackendEvent>,
 
     mode: AppMode,
 
@@ -69,9 +37,30 @@ pub struct HolonApp {
 
 impl HolonApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let (backend_commands, backend_events) = spawn_background_system(cc.egui_ctx.clone());
+        const COMMAND_BUFFER_SIZE: usize = 32;
 
-        if let Err(err) = backend_commands.try_send(BackendCommand::FetchAll) {
+        let (cmd_tx, cmd_rx) = tokio_channel(COMMAND_BUFFER_SIZE);
+        let (event_tx, event_rx) = mpsc::channel();
+
+        let ctx = cc.egui_ctx.clone();
+        // Spawn ONE dedicated OS thread for the entire networking backend
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || {
+            // Block this thread on the main backend loop
+
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(start_backend(ctx, cmd_rx, event_tx));
+        });
+
+        // In WASM, we just toss the entire background loop onto the JS event loop.
+        // It will yield execution at every `.await`, so it won't freeze the UI.
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(start_backend(ctx, cmd_rx, event_tx));
+
+        if let Err(err) = cmd_tx.try_send(BackendCommand::FetchAll) {
             log::error!("Failed to send fetch all command to network backend: {err}")
         }
 
@@ -90,8 +79,8 @@ impl HolonApp {
             #[cfg(not(target_arch = "wasm32"))]
             api_key_input: String::new(),
 
-            backend_events,
-            backend_commands,
+            backend_events: event_rx,
+            backend_commands: cmd_tx,
         }
     }
 
@@ -178,6 +167,35 @@ impl HolonApp {
 
         Ok(())
     }
+
+    fn show_api_key_dialog(
+        &mut self,
+        ui: &mut egui::Ui,
+    ) -> Option<egui::InnerResponse<Option<()>>> {
+        fn save_api_key(key: &str) -> Result<(), keyring::Error> {
+            keyring::Entry::new("holonui", "default-user")?.set_password(key)
+        }
+
+        egui::Window::new("API Key")
+            .collapsible(false)
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                ui.label("Enter your Nobitex API token:");
+                ui.text_edit_singleline(&mut self.api_key_input);
+
+                if ui.button("Save").clicked() {
+                    if let Err(err) = save_api_key(&self.api_key_input) {
+                        log::error!("Failed to save api_key: {err}")
+                    }
+
+                    if let Err(err) = self.set_backend_token(self.api_key_input.clone()) {
+                        log::error!("Failed to send update api key command to backend: {err}")
+                    }
+
+                    self.show_api_key_dialog = false;
+                }
+            })
+    }
 }
 
 impl eframe::App for HolonApp {
@@ -186,29 +204,7 @@ impl eframe::App for HolonApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         if self.show_api_key_dialog {
-            fn save_api_key(key: &str) -> Result<(), keyring::Error> {
-                keyring::Entry::new("holonui", "default-user")?.set_password(key)
-            }
-
-            egui::Window::new("API Key")
-                .collapsible(false)
-                .resizable(false)
-                .show(ui.ctx(), |ui| {
-                    ui.label("Enter your Nobitex API token:");
-                    ui.text_edit_singleline(&mut self.api_key_input);
-
-                    if ui.button("Save").clicked() {
-                        if let Err(err) = save_api_key(&self.api_key_input) {
-                            log::error!("Failed to save api_key: {err}")
-                        }
-
-                        if let Err(err) = self.set_backend_token(self.api_key_input.clone()) {
-                            log::error!("Failed to send update api key command to backend: {err}")
-                        }
-
-                        self.show_api_key_dialog = false;
-                    }
-                });
+            self.show_api_key_dialog(ui);
         }
 
         // TODO: We should probably schedule a redraw based on self.time_unit_sec because for low enough
