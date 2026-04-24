@@ -113,14 +113,11 @@ impl<'f> PlotContext<'f> {
 }
 
 impl PlotContext<'_> {
-    // TODO: When there is no orders, the anchor should be in the middle of the screen
-    // TODO: The x=0, y=0 in linear spacing mode should be the bottom (no bottom or left padding)
     // TODO: In logarithmic coordinate, the min order coordinates + some padding should be the low x and low y bounds
     fn order_frontier_bounds(&self) -> PlotBounds {
         let mut bounds = PlotBounds::NOTHING;
 
         bounds.extend_with(&PlotPoint::from(*self.anchor));
-        // bounds.extend_with(&PlotPoint::new(0.0, 0.0));
 
         let mut buy_point = *self.anchor;
         for order in &self.orders.bids {
@@ -137,8 +134,13 @@ impl PlotContext<'_> {
             bounds.extend_with(&PlotPoint::from(sell_point));
         }
 
+        // TODO: These should be relative to
         bounds.expand_x(bounds.width() * 0.06);
         bounds.expand_y(bounds.height() * 0.06);
+
+        if !self.orders.bids.is_empty() || !self.orders.asks.is_empty() {
+            bounds.extend_with(&PlotPoint::new(0.0, 0.0));
+        }
 
         bounds
     }

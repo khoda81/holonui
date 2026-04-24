@@ -18,6 +18,7 @@ use tokio::sync::{RwLock, mpsc as tmpsc};
 use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
+// TODO: These should be runtime vars
 const X: &str = "usdt";
 const Y: &str = "rls";
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
