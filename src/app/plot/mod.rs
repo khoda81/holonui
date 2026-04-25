@@ -4,7 +4,7 @@ use egui_plot::{
     Points, VLine,
 };
 
-use crate::app::backend::models::Trade;
+use crate::{app::backend::models::Trade, utils::format_human_num};
 
 use super::{
     AppMode,
@@ -199,6 +199,8 @@ impl ChartState {
             .allow_double_click_reset(false)
             .x_grid_spacer(move |input| grid_marks(input, positive_only_grid))
             .y_grid_spacer(move |input| grid_marks(input, positive_only_grid))
+            .x_axis_formatter(|mark, _range| format_human_num(mark.value, mark.step_size))
+            .y_axis_formatter(|mark, _range| format_human_num(mark.value, mark.step_size))
             .show(ui, |ui| {
                 if ui.response().double_clicked() || self.bounds_need_update {
                     let bounds = ctx.order_frontier_bounds();

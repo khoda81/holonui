@@ -44,6 +44,20 @@ pub fn format_humantime(sec: f64) -> String {
     }
 }
 
+pub fn format_human_num(num: f64, scale: f64) -> String {
+    if num == 0.0 {
+        return String::new();
+    }
+
+    match scale {
+        ..1e3 => format!("{:4}", num),
+        ..1e6 => format!("{:4}K", num / 1e3),
+        ..1e9 => format!("{:4}M", num / 1e6),
+        ..1e12 => format!("{:4}B", num / 1e9),
+        _ => format!("{:4}T", num / 1e12),
+    }
+}
+
 pub fn get_api_key() -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     return {
