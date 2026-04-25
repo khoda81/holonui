@@ -71,66 +71,67 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
 
     let (min_y, max_y) = input.bounds;
 
+    // Upper scales
     marks.extend(log_marks(1.0, min_y..=max_y));
     let mut step_size = 3.0;
     loop {
         let prev_len = marks.len();
         marks.extend(log_marks(step_size, min_y..=max_y));
-        step_size *= 2.0;
         if marks.len() <= prev_len + 3 {
             break;
         }
+
+        step_size *= 2.0;
     }
 
-    // // 2. Normal to zoomed-in view
-    // let min_power = min_y.floor() as i32;
-    // let max_power = max_y.ceil() as i32;
+    // Lower scales
+    let span = max_y.ceil();
 
-    // // Determine how deep we need to subdivide.
-    // // If view_span is 1.0, depth=0 (1-9). If view_span is 0.1, depth=1 (1.1-1.9), etc.
-    // let depth = if view_span >= 1.0 {
-    //     0
-    // } else {
-    //     (-view_span.floor()) as i32
-    // };
+    log::trace!("Span: {span}");
+    let mut step_size = 10f64.powf(span);
+    loop {
+        marks.extend(linear_marks(step_size, &input).take(10));
 
-    // let mut depths = [depth, depth - 1, depth - 2, depth - 3, depth - 4];
-    // depths.reverse();
+        if step_size < input.base_step_size {
+            break;
+        }
 
-    // for depth in depths {
-    //     // $\Delta x$ at the base level (e.g., 1.0, 0.1, 0.01)
-    //     let linear_step_multiplier = 10_f64.powi(-depth);
-
-    //     for power in min_power - 1..=max_power {
-    //         // Calculate the maximum multiplier we need to check to cover the range
-    //         // For depth=0, it's 1..10. For depth=1, it's 10..100, etc.
-    //         let start_mult = (20_f64.powi(depth)).round() as i64;
-    //         let end_mult = start_mult * 199;
-
-    //         for m in start_mult..end_mult {
-    //             let y = (m as f64).log10() + (power - depth) as f64;
-
-    //             marks.push(GridMark {
-    //                 value: y,
-    //                 step_size: linear_step_multiplier / m as f64,
-    //             });
-    //         }
-    //     }
-    // }
+        step_size /= 10.0;
+    }
 
     marks
 }
 
-fn log_marks(
-    step_size: f64,
-    bounds_range: RangeInclusive<f64>,
-) -> std::iter::Map<RangeInclusive<i32>, impl FnMut(i32) -> GridMark> {
+fn log_marks(step_size: f64, bounds_range: RangeInclusive<f64>) -> impl Iterator<Item = GridMark> {
     let min_power = (bounds_range.start() / step_size).floor() as i32;
     let max_power = (bounds_range.end() / step_size).ceil() as i32;
 
     (min_power..=max_power).map(move |power| GridMark {
         value: (power as f64) * step_size,
         step_size,
+    })
+}
+
+fn linear_marks(step_size: f64, input: &GridInput) -> impl Iterator<Item = GridMark> {
+    let (start, end) = input.bounds;
+    // Convert log-space bounds back to linear space to find the x indices
+    let min_linear = 10_f64.powf(start) / step_size;
+    let max_linear = 10_f64.powf(end) / step_size;
+
+    // Floor the min and ceil the max to ensure we cover the edges.
+    // Clamp min_x to 1 to avoid log10(0) which results in -Infinity.
+    let min_x = (min_linear.floor() as i64).max(1);
+    let max_x = max_linear.ceil() as i64;
+    let size_bound = (step_size * 0.5 / input.base_step_size).ceil() as usize;
+    // let max_x = max_x.min(size_bound as i32);
+
+    log::trace!("--------------- {min_x}, {max_x}");
+
+    // step_size * 0.5 / base_step_size > x
+
+    (min_x..=max_x).take(size_bound).map(move |x| GridMark {
+        value: (x as f64 * step_size).log10(),
+        step_size: step_size * 0.5 / x as f64,
     })
 }
 
