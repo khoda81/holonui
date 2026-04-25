@@ -1,5 +1,8 @@
 use egui_plot::{GridInput, GridMark};
-use std::time::Duration;
+use std::{
+    ops::{Mul, Sub},
+    time::Duration,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_task<F>(future: F)
@@ -67,42 +70,61 @@ fn keep_4_significant_digits(num: f64) -> f64 {
 
 pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     let mut marks = Vec::new();
-
-    // input.bounds gives us the visible min and max of your Y-axis (which is log10(p))
     let (min_y, max_y) = input.bounds;
+    let view_span = max_y - min_y;
 
-    // Find the minimum and maximum powers of 10 currently visible
-    let min_power = min_y.floor() as i32;
-    let max_power = max_y.ceil() as i32;
+    // 1. Zoomed out heavily: skip powers of 10 (1k, 1M, 1B...)
+    if view_span > 10.0 {
+        // Determine exponent step (e.g., every 3rd power, every 6th power)
+        let step_size_log = view_span.floor().sub(1.0);
+        let exp_step = 10f64.powf(step_size_log).max(1.0);
 
-    // TODO: The step size should be dynamic based on the range
-    let step_size = 1.0;
+        let min_power = (min_y / exp_step).floor() as i32;
+        let max_power = (max_y / exp_step).ceil() as i32;
 
-    for power in min_power..=max_power {
-        // 1. MAJOR TICK: Exact powers of 10 (e.g., y = 1.0, 2.0, 3.0)
-        let major_y = power as f64;
-        let scale = 10_f64.powi(power);
-        if (min_y..=max_y).contains(&major_y) {
+        for power in min_power..=max_power {
+            let y = (power as f64) * exp_step;
+
             marks.push(GridMark {
-                value: major_y,
-                step_size, // Large step_size tells egui to draw a thicker line
+                value: y,
+                step_size: exp_step, // Large step size for major bounds
             });
         }
 
-        // TODO: The hardcoded `90` is a bit of a hack as the minor ticks disappear if the major tick goes our of range which is not correct
-        // TODO: Minor ticks should recursively subdivide as we zoom in, just like the typical logarithmic ticks
-        // 2. MINOR TICKS: The lines that get closer together
-        for multiplier in 2..=1000 {
-            // Calculate actual price: e.g., 2 * 10^1 = 20
-            let multiplier = multiplier as f64;
-            let minor_p = multiplier * scale;
-            // Convert back to log space for the Y-axis coordinate
-            let minor_y = minor_p.log10();
+        return marks;
+    }
 
-            if (min_y..=max_y).contains(&minor_y) {
+    // 2. Normal to zoomed-in view
+    let min_power = min_y.floor() as i32;
+    let max_power = max_y.ceil() as i32;
+
+    // Determine how deep we need to subdivide.
+    // If view_span is 1.0, depth=0 (1-9). If view_span is 0.1, depth=1 (1.1-1.9), etc.
+    let depth = if view_span >= 1.0 {
+        0
+    } else {
+        (-view_span.floor()) as i32
+    };
+
+    let mut depths = [depth, depth - 1, depth - 2, depth - 3, depth - 4];
+    depths.reverse();
+
+    for depth in depths {
+        // $\Delta x$ at the base level (e.g., 1.0, 0.1, 0.01)
+        let linear_step_multiplier = 10_f64.powi(-depth);
+
+        for power in min_power - 1..=max_power {
+            // Calculate the maximum multiplier we need to check to cover the range
+            // For depth=0, it's 1..10. For depth=1, it's 10..100, etc.
+            let start_mult = (20_f64.powi(depth)).round() as i64;
+            let end_mult = start_mult * 199;
+
+            for m in start_mult..end_mult {
+                let y = (m as f64).log10() + (power - depth) as f64;
+
                 marks.push(GridMark {
-                    value: minor_y,
-                    step_size: step_size / multiplier, // Smaller step_size tells egui to draw a fainter line
+                    value: y,
+                    step_size: linear_step_multiplier / m as f64,
                 });
             }
         }

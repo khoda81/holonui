@@ -115,12 +115,15 @@ impl HolonApp {
     }
 
     fn render_main_plot(&mut self, ui: &mut egui::Ui) {
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.heading("HolonUI - Skyline Visualizer");
-            egui::Panel::right("plot config")
-                .resizable(false)
-                .show_inside(ui, |ui| self.show_chart_config(ui));
+        egui::Panel::top("heading")
+            .resizable(false)
+            .show_inside(ui, |ui| ui.heading("HolonUI - Skyline Visualizer"));
 
+        egui::Panel::right("plot config")
+            .resizable(false)
+            .show_inside(ui, |ui| self.show_chart_config(ui));
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             let now = Utc::now();
             let mut context = plot::PlotContext::new(self.mode, now, &self.anchor);
             if self.show_trajectory {
