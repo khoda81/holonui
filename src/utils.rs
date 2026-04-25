@@ -74,7 +74,6 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     // Find the minimum and maximum powers of 10 currently visible
     let min_power = min_y.floor() as i32;
     let max_power = max_y.ceil() as i32;
-    let max_power = (min_power + 1000).min(max_power);
 
     // TODO: The step size should be dynamic based on the range
     let step_size = 1.0;
@@ -93,7 +92,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         // TODO: The hardcoded `90` is a bit of a hack as the minor ticks disappear if the major tick goes our of range which is not correct
         // TODO: Minor ticks should recursively subdivide as we zoom in, just like the typical logarithmic ticks
         // 2. MINOR TICKS: The lines that get closer together
-        for multiplier in 2..=9 {
+        for multiplier in 2..=1000 {
             // Calculate actual price: e.g., 2 * 10^1 = 20
             let multiplier = multiplier as f64;
             let minor_p = multiplier * scale;
