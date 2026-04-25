@@ -225,6 +225,7 @@ impl ChartState {
             })
             .x_axis_formatter(|mark, _range| {
                 if log_grid_spacing {
+                    // TODO: We should pass the numbers in logspace to the formatter
                     format_human_num(
                         (mark.value * 10.0_f64.ln()).exp(),
                         (mark.value * 10.0_f64.ln()).exp(),
