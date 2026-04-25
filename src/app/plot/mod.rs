@@ -137,10 +137,6 @@ impl PlotContext<'_> {
             bounds.extend_with(&PlotPoint::from(sell_point));
         }
 
-        // TODO: These should be relative to
-        bounds.expand_x(bounds.width() * 0.06);
-        bounds.expand_y(bounds.height() * 0.06);
-
         bounds
     }
 }
@@ -229,14 +225,20 @@ impl ChartState {
             })
             .x_axis_formatter(|mark, _range| {
                 if log_grid_spacing {
-                    format_human_num((mark.value * 10.0_f64.ln()).exp(), mark.step_size)
+                    format_human_num(
+                        (mark.value * 10.0_f64.ln()).exp(),
+                        (mark.value * 10.0_f64.ln()).exp(),
+                    )
                 } else {
                     format_human_num(mark.value, mark.step_size)
                 }
             })
             .y_axis_formatter(|mark, _range| {
                 if log_grid_spacing {
-                    format_human_num((mark.value * 10.0_f64.ln()).exp(), mark.step_size)
+                    format_human_num(
+                        (mark.value * 10.0_f64.ln()).exp(),
+                        (mark.value * 10.0_f64.ln()).exp(),
+                    )
                 } else {
                     format_human_num(mark.value, mark.step_size)
                 }
@@ -252,8 +254,16 @@ impl ChartState {
                         max.to_logspace();
                         bounds = PlotBounds::from_min_max(min, max);
                         log::trace!("Updated Min: {min:?}, Max: {max:?}");
-                    } else if !ctx.orders.bids.is_empty() || !ctx.orders.asks.is_empty() {
-                        bounds.extend_with(&PlotPoint::new(0.0, 0.0));
+
+                        bounds.expand_x(bounds.width() * 0.06);
+                        bounds.expand_y(bounds.height() * 0.06);
+                    } else {
+                        bounds.expand_x(bounds.width() * 0.06);
+                        bounds.expand_y(bounds.height() * 0.06);
+
+                        if !ctx.orders.bids.is_empty() || !ctx.orders.asks.is_empty() {
+                            bounds.extend_with(&PlotPoint::new(0.0, 0.0));
+                        }
                     }
 
                     self.bounds_need_update = false;
@@ -270,7 +280,7 @@ impl ChartState {
         ui: &mut egui_plot::PlotUi<'_>,
         ctx: PlotContext<'_>,
     ) -> PlotPanelResponse {
-        // TODO: Implement logarithmic coordinates
+        // TODO: In log coordinate the aspect ratio should be always 1
         // TODO: The numbers should be human readable formatted instead of 80000000 we should have 80M
         // TODO: Draw the budget line passing through anchor, highlighted point
 

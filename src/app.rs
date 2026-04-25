@@ -155,8 +155,13 @@ impl HolonApp {
             .set_time_unit(chrono::Duration::nanoseconds((time_unit_sec * 1e9) as i64));
 
         ui.vertical(|ui| {
+            let prev_scaling = self.chart.log_grid_spacing;
             ui.checkbox(&mut self.chart.log_grid_spacing, "Logarithmic Grid Spacing");
             ui.checkbox(&mut self.chart.positive_only_grid, "Positive-Only Grid");
+            if self.chart.log_grid_spacing != prev_scaling {
+                // TODO: Instead of updating the bounds blindly, map the current bounds between exp/log space
+                self.chart.bounds_need_update = true;
+            }
         });
 
         ui.vertical(|ui| {

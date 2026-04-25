@@ -52,12 +52,12 @@ pub fn format_human_num(num: f64, scale: f64) -> String {
     }
 
     match scale {
-        ..1e0 => format!("{:4.3}", num),
-        ..1e3 => format!("{:4.3}", keep_4_significant_digits(num)),
-        ..1e6 => format!("{:4.3}K", keep_4_significant_digits(num / 1e3)),
-        ..1e9 => format!("{:4.3}M", keep_4_significant_digits(num / 1e6)),
-        ..1e12 => format!("{:4.3}B", keep_4_significant_digits(num / 1e9)),
-        _ => format!("{:4.3}T", keep_4_significant_digits(num / 1e12)),
+        ..1e0 => format!("{:4}", num),
+        ..1e3 => format!("{:4}", keep_4_significant_digits(num)),
+        ..1e6 => format!("{:4}K", keep_4_significant_digits(num / 1e3)),
+        ..1e9 => format!("{:4}M", keep_4_significant_digits(num / 1e6)),
+        ..1e12 => format!("{:4}B", keep_4_significant_digits(num / 1e9)),
+        _ => format!("{:4}T", keep_4_significant_digits(num / 1e12)),
     }
 }
 
@@ -81,13 +81,16 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     // let show_minor_ticks = (max_y - min_y) < 10.0;
     let show_minor_ticks = true;
 
+    let step_size = 1.0;
+
     for power in min_power..=max_power {
         // 1. MAJOR TICK: Exact powers of 10 (e.g., y = 1.0, 2.0, 3.0)
         let major_y = power as f64;
-        if major_y >= min_y && major_y <= max_y {
+        let scale = 10_f64.powi(power);
+        if (min_y..=max_y).contains(&major_y) {
             marks.push(GridMark {
                 value: major_y,
-                step_size: 1.0, // Large step_size tells egui to draw a thicker line
+                step_size, // Large step_size tells egui to draw a thicker line
             });
         }
 
@@ -96,14 +99,14 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
             for multiplier in 2..=90 {
                 // Calculate actual price: e.g., 2 * 10^1 = 20
                 let multiplier = multiplier as f64;
-                let minor_p = multiplier * 10f64.powi(power);
+                let minor_p = multiplier * scale;
                 // Convert back to log space for the Y-axis coordinate
                 let minor_y = minor_p.log10();
 
-                if minor_y >= min_y && minor_y <= max_y {
+                if (min_y..=max_y).contains(&minor_y) {
                     marks.push(GridMark {
                         value: minor_y,
-                        step_size: 0.5 / multiplier, // Smaller step_size tells egui to draw a fainter line
+                        step_size: step_size / multiplier, // Smaller step_size tells egui to draw a fainter line
                     });
                 }
             }
