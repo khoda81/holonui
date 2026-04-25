@@ -76,11 +76,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     let max_power = max_y.ceil() as i32;
     let max_power = (min_power + 1000).min(max_power);
 
-    // If the user zooms out too far (e.g., viewing > 5 orders of magnitude),
-    // we stop drawing minor ticks to prevent screen clutter.
-    // let show_minor_ticks = (max_y - min_y) < 10.0;
-    let show_minor_ticks = true;
-
+    // TODO: The step size should be dynamic based on the range
     let step_size = 1.0;
 
     for power in min_power..=max_power {
@@ -94,21 +90,21 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
             });
         }
 
+        // TODO: The hardcoded `90` is a bit of a hack as the minor ticks disappear if the major tick goes our of range which is not correct
+        // TODO: Minor ticks should recursively subdivide as we zoom in, just like the typical logarithmic ticks
         // 2. MINOR TICKS: The lines that get closer together
-        if show_minor_ticks {
-            for multiplier in 2..=90 {
-                // Calculate actual price: e.g., 2 * 10^1 = 20
-                let multiplier = multiplier as f64;
-                let minor_p = multiplier * scale;
-                // Convert back to log space for the Y-axis coordinate
-                let minor_y = minor_p.log10();
+        for multiplier in 2..=9 {
+            // Calculate actual price: e.g., 2 * 10^1 = 20
+            let multiplier = multiplier as f64;
+            let minor_p = multiplier * scale;
+            // Convert back to log space for the Y-axis coordinate
+            let minor_y = minor_p.log10();
 
-                if (min_y..=max_y).contains(&minor_y) {
-                    marks.push(GridMark {
-                        value: minor_y,
-                        step_size: step_size / multiplier, // Smaller step_size tells egui to draw a fainter line
-                    });
-                }
+            if (min_y..=max_y).contains(&minor_y) {
+                marks.push(GridMark {
+                    value: minor_y,
+                    step_size: step_size / multiplier, // Smaller step_size tells egui to draw a fainter line
+                });
             }
         }
     }
