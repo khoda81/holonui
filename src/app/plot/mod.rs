@@ -4,7 +4,10 @@ use egui_plot::{
     Points, VLine,
 };
 
-use crate::{app::backend::models::Trade, utils::format_human_num};
+use crate::{
+    app::backend::models::Trade,
+    utils::{format_human_num, log10_grid_spacer},
+};
 
 use super::{
     AppMode,
@@ -138,10 +141,6 @@ impl PlotContext<'_> {
         bounds.expand_x(bounds.width() * 0.06);
         bounds.expand_y(bounds.height() * 0.06);
 
-        if !self.orders.bids.is_empty() || !self.orders.asks.is_empty() {
-            bounds.extend_with(&PlotPoint::new(0.0, 0.0));
-        }
-
         bounds
     }
 }
@@ -167,6 +166,22 @@ fn grid_marks(input: GridInput, positive_only: bool) -> Vec<GridMark> {
     marks
 }
 
+trait ToLogSpace {
+    fn to_logspace(&mut self);
+}
+
+impl<const N: usize> ToLogSpace for Vec<[f64; N]> {
+    fn to_logspace(&mut self) {
+        self.iter_mut().for_each(ToLogSpace::to_logspace);
+    }
+}
+
+impl<const N: usize> ToLogSpace for [f64; N] {
+    fn to_logspace(&mut self) {
+        *self = self.map(f64::log10);
+    }
+}
+
 pub struct PlotPanelResponse {
     pub clicked_delta: Option<[f64; 2]>,
 }
@@ -175,7 +190,7 @@ impl ChartState {
     pub fn new() -> Self {
         Self {
             time_unit: chrono::Duration::days(2),
-            log_grid_spacing: false,
+            log_grid_spacing: true,
             positive_only_grid: true,
             bounds_need_update: false,
         }
@@ -185,29 +200,65 @@ impl ChartState {
         self.bounds_need_update = true
     }
 
-    pub(crate) fn show(
+    pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         ctx: PlotContext<'_>,
     ) -> PlotResponse<PlotPanelResponse> {
         let positive_only_grid = self.positive_only_grid;
+        let log_grid_spacing = self.log_grid_spacing;
 
         Plot::new("skyline_plot")
             .show_grid(true)
             .legend(egui_plot::Legend::default())
             .auto_bounds(false)
             .allow_double_click_reset(false)
-            .x_grid_spacer(move |input| grid_marks(input, positive_only_grid))
-            .y_grid_spacer(move |input| grid_marks(input, positive_only_grid))
-            .x_axis_formatter(|mark, _range| format_human_num(mark.value, mark.step_size))
-            .y_axis_formatter(|mark, _range| format_human_num(mark.value, mark.step_size))
+            .x_grid_spacer(move |input| {
+                if log_grid_spacing {
+                    log10_grid_spacer(input)
+                } else {
+                    grid_marks(input, positive_only_grid)
+                }
+            })
+            .y_grid_spacer(move |input| {
+                if log_grid_spacing {
+                    log10_grid_spacer(input)
+                } else {
+                    grid_marks(input, positive_only_grid)
+                }
+            })
+            .x_axis_formatter(|mark, _range| {
+                if log_grid_spacing {
+                    format_human_num((mark.value * 10.0_f64.ln()).exp(), mark.step_size)
+                } else {
+                    format_human_num(mark.value, mark.step_size)
+                }
+            })
+            .y_axis_formatter(|mark, _range| {
+                if log_grid_spacing {
+                    format_human_num((mark.value * 10.0_f64.ln()).exp(), mark.step_size)
+                } else {
+                    format_human_num(mark.value, mark.step_size)
+                }
+            })
             .show(ui, |ui| {
                 if ui.response().double_clicked() || self.bounds_need_update {
-                    let bounds = ctx.order_frontier_bounds();
+                    let mut bounds = ctx.order_frontier_bounds();
+                    let mut min = bounds.min();
+                    let mut max = bounds.max();
+                    log::trace!("Min: {min:?}, Max: {max:?}");
+                    if self.log_grid_spacing {
+                        min.to_logspace();
+                        max.to_logspace();
+                        bounds = PlotBounds::from_min_max(min, max);
+                        log::trace!("Updated Min: {min:?}, Max: {max:?}");
+                    } else if !ctx.orders.bids.is_empty() || !ctx.orders.asks.is_empty() {
+                        bounds.extend_with(&PlotPoint::new(0.0, 0.0));
+                    }
+
                     self.bounds_need_update = false;
 
-                    ui.set_plot_bounds_x(bounds.range_x());
-                    ui.set_plot_bounds_y(bounds.range_y());
+                    ui.set_plot_bounds(bounds);
                 }
 
                 self.render_plot_contents(ui, ctx)
@@ -259,14 +310,16 @@ impl ChartState {
             let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
             // TODO: Drawing as separate lines causes weird artifact at the joints where two lines overlap for one pixel
             // TODO: Can we use additive blending to make the redrawn lines visually better? Additive blending that can cause overblown colors and bloom is even better like a laser/light source
-            let segment = Line::new(
-                "Trajectory",
-                PlotPoints::new(vec![current_point, next_point]),
-            )
-            .color(color)
-            .width(2.0)
-            .allow_hover(false)
-            .style(egui_plot::LineStyle::Solid);
+            let mut points = vec![current_point, next_point];
+            if self.log_grid_spacing {
+                points.to_logspace()
+            }
+
+            let segment = Line::new("Trajectory", PlotPoints::new(points))
+                .color(color)
+                .width(2.0)
+                .allow_hover(false)
+                .style(egui_plot::LineStyle::Solid);
 
             // TODO: This causes weird rescaling for the plot when the time unit is adjusted, how do we tell egui to not zoom out for the trajectory lines?
             if alpha > 0 {
@@ -285,8 +338,14 @@ impl ChartState {
 
             let next_point = [buy_point[0] + order.delta[0], buy_point[1] + order.delta[1]];
 
+            let mut points = vec![buy_point, next_point];
+
+            if self.log_grid_spacing {
+                points.to_logspace()
+            }
+
             ui.line(
-                Line::new("Bid Orders", PlotPoints::new(vec![buy_point, next_point]))
+                Line::new("Bid Orders", PlotPoints::new(points))
                     .color(color)
                     .width(2.6)
                     .style(egui_plot::LineStyle::Solid),
@@ -294,6 +353,10 @@ impl ChartState {
 
             buy_point = next_point;
             buy_nodes.push(next_point);
+        }
+
+        if self.log_grid_spacing {
+            buy_nodes.to_logspace()
         }
 
         if buy_nodes.len() > 1 {
@@ -315,8 +378,14 @@ impl ChartState {
                 sell_point[1] + order.delta[1],
             ];
 
+            let mut points = vec![sell_point, next_point];
+
+            if self.log_grid_spacing {
+                points.to_logspace()
+            }
+
             ui.line(
-                Line::new("Ask Orders", PlotPoints::new(vec![sell_point, next_point]))
+                Line::new("Ask Orders", PlotPoints::new(points))
                     .color(color)
                     .width(2.6)
                     .style(egui_plot::LineStyle::Solid),
@@ -325,6 +394,11 @@ impl ChartState {
             sell_point = next_point;
             sell_nodes.push(next_point);
         }
+
+        if self.log_grid_spacing {
+            sell_nodes.to_logspace()
+        }
+
         if sell_nodes.len() > 1 {
             ui.points(
                 Points::new("Ask Order Nodes", sell_nodes)
@@ -333,8 +407,13 @@ impl ChartState {
             );
         }
 
+        let mut anchor_node = vec![*ctx.anchor];
+        if self.log_grid_spacing {
+            anchor_node.to_logspace();
+        }
+
         ui.points(
-            Points::new("Anchor (Current Balance)", vec![*ctx.anchor])
+            Points::new("Anchor (Current Balance)", anchor_node)
                 .radius(6.5)
                 .color(egui::Color32::from_rgb(250, 244, 230)),
         );
@@ -348,7 +427,13 @@ impl ChartState {
         }
 
         if let Some(mouse_pos) = ui.pointer_coordinate() {
-            let ghost_points = vec![*ctx.anchor, [mouse_pos.x, mouse_pos.y]];
+            let mut ghost_points = vec![*ctx.anchor];
+
+            if self.log_grid_spacing {
+                ghost_points.to_logspace();
+            }
+
+            ghost_points.push([mouse_pos.x, mouse_pos.y]);
 
             let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
                 .color(egui::Color32::from_rgba_unmultiplied(240, 240, 255, 170))
@@ -361,6 +446,10 @@ impl ChartState {
         if ui.response().clicked()
             && let Some(PlotPoint { x, y }) = ui.pointer_coordinate()
         {
+            if self.log_grid_spacing {
+                todo!()
+            }
+
             response.clicked_delta = Some([x - ctx.anchor[0], y - ctx.anchor[1]]);
         }
 

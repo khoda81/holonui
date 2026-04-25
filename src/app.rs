@@ -36,7 +36,7 @@ pub struct HolonApp {
 
 impl HolonApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        const COMMAND_BUFFER_SIZE: usize = 32;
+        const COMMAND_BUFFER_SIZE: usize = 3;
 
         let (cmd_tx, cmd_rx) = tmpsc::unbounded_channel();
         let (event_tx, event_rx) = tmpsc::channel(COMMAND_BUFFER_SIZE);
