@@ -117,28 +117,33 @@ impl HolonApp {
     fn render_main_plot(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("HolonUI - Skyline Visualizer");
+            egui::Panel::right("plot config")
+                .resizable(false)
+                .show_inside(ui, |ui| {
+                    // TODO: Store these configuration/settings in a persistent manner
+                    let mut time_unit_sec = self.chart.time_unit().as_seconds_f64();
+                    ui.vertical(|ui| {
+                        ui.label("Time Unit:");
+                        ui.add(
+                            egui::Slider::new(&mut time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
+                                .logarithmic(true)
+                                .custom_formatter(|sec, _| format_humantime(sec)),
+                        );
+                    });
 
-            let mut time_unit_sec = self.chart.time_unit().as_seconds_f64();
-            ui.horizontal(|ui| {
-                ui.label("Time Unit:");
-                ui.add(
-                    egui::Slider::new(&mut time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
-                        .logarithmic(true)
-                        .custom_formatter(|sec, _| format_humantime(sec)),
-                );
-            });
-            self.chart
-                .set_time_unit(chrono::Duration::nanoseconds((time_unit_sec * 1e9) as i64));
+                    self.chart
+                        .set_time_unit(chrono::Duration::nanoseconds((time_unit_sec * 1e9) as i64));
 
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.chart.log_grid_spacing, "Logarithmic Grid Spacing");
-                ui.checkbox(&mut self.chart.positive_only_grid, "Positive-Only Grid");
-            });
+                    ui.vertical(|ui| {
+                        ui.checkbox(&mut self.chart.log_grid_spacing, "Logarithmic Grid Spacing");
+                        ui.checkbox(&mut self.chart.positive_only_grid, "Positive-Only Grid");
+                    });
 
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.show_trajectory, "Show Trajectory");
-                ui.checkbox(&mut self.show_order_frontier, "Show Order Frontier");
-            });
+                    ui.vertical(|ui| {
+                        ui.checkbox(&mut self.show_trajectory, "Show Trajectory");
+                        ui.checkbox(&mut self.show_order_frontier, "Show Order Frontier");
+                    });
+                });
 
             let now = Utc::now();
             let mut context = plot::PlotContext::new(self.mode, now, &self.anchor);
