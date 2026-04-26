@@ -86,14 +86,18 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     // Upper scales
     marks.extend(log_marks(1.0, min_y).take_while(|m| m.value <= max_y));
     let mut step_size = 3.0;
-    loop {
-        let prev_len = marks.len();
 
-        log::trace!("Log   : {}", marks.len());
+    // Calculate the visible span
+    let view_span = max_y - min_y;
+
+    loop {
+        log::trace!("Log   : {}, step_size: {}", marks.len(), step_size);
         marks.extend(log_marks(step_size, min_y).take_while(|m| m.value <= max_y));
 
-        // TODO: We should probably use a better condition here
-        if marks.len() <= prev_len {
+        // Break when the step size is larger than the screen span.
+        // We multiply by 2.0 to ensure egui has one level larger than the screen
+        // to handle cross-fading gracefully.
+        if step_size > view_span * 2.0 {
             break;
         }
 
