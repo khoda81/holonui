@@ -77,6 +77,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     loop {
         let prev_len = marks.len();
         marks.extend(log_marks(step_size, min_y..=max_y));
+        // TODO: We should probably use a better condition here
         if marks.len() <= prev_len + 3 {
             break;
         }
@@ -87,15 +88,23 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     // Lower scales
     let span = max_y.ceil();
 
-    log::trace!("Span: {span}");
+    log::trace!("Span: {span}, Base Step: {}", input.base_step_size);
+
+    // Calculate the maximum 'x' multiplier egui will actually render before fading to 0
+    let max_visible_x = (0.5 / input.base_step_size).ceil() as i64;
+
     let mut step_size = 10f64.powf(span);
     loop {
-        marks.extend(linear_marks(step_size, &input));
+        // Find where this layer starts in the current view
+        let min_linear = 10_f64.powf(min_y) / step_size;
+        let min_x = (min_linear.floor() as i64).max(1);
 
-        if step_size < input.base_step_size {
+        // If the start of the layer is too dense, the whole layer (and all deeper layers) are invisible.
+        if min_x > max_visible_x {
             break;
         }
 
+        marks.extend(linear_marks(step_size, &input));
         step_size /= 10.0;
     }
 
@@ -121,11 +130,15 @@ fn linear_marks(step_size: f64, input: &GridInput) -> impl Iterator<Item = GridM
     // Floor the min and ceil the max to ensure we cover the edges.
     // Clamp min_x to 1 to avoid log10(0) which results in -Infinity.
     let min_x = (min_linear.floor() as i64).max(1);
-    let max_x = max_linear.ceil() as i64;
+    let max_x: i64 = max_linear.ceil() as i64;
     let size_bound = (0.5 / input.base_step_size).ceil() as usize;
     // let max_x = max_x.min(size_bound as i32);
 
     log::trace!("--------------- {min_x}, {max_x}");
+
+    if max_x == 0 {
+        panic!()
+    }
 
     // step_size * 0.5 / base_step_size > x
 
