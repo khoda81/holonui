@@ -101,25 +101,21 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     }
 
     // Lower scales
-    let mut span = max_y.floor();
+    let max_visible_x = 0.5 / input.base_step_size;
 
-    log::trace!("Span: {span}, Base Step: {}", input.base_step_size);
+    // Calculate the exact lowest span where marks are still visible
+    // base.powf(min_y - span) <= max_visible_x  ->  span >= min_y - log10(max_visible_x)
+    let start_span = (min_y - max_visible_x.ln() / ln_base).ceil() as i32;
+    let end_span = max_y.floor() as i32;
 
-    // The maximum `x` multiplier before lines fade to invisible
-    loop {
-        let min_linear = base.powf(min_y - span);
+    log::trace!(
+        "Start Span: {start_span}, Base Step: {}",
+        input.base_step_size
+    );
 
-        // Break if we hit Infinity (zoomed out too far for f64)
-        // or if the starting line is already too dense to be visible
-        if 0.5 / min_linear < input.base_step_size {
-            break;
-        }
-
-        // Do all clamping in f64 space.
-        // Cap max_x at max_visible_x because anything beyond that has 0 opacity anyway.
-        // Only cast to u32 now that we know the values are small and finite
-        // If min_x > max_x (e.g. out of bounds), this naturally yields an empty iterator.
-        let min_x = min_linear.ceil() as u64;
+    for span in start_span..=end_span {
+        let span = span as f64;
+        let min_x = base.powf(min_y - span).ceil() as u64;
 
         let new_marks = (min_x..)
             .map(move |x| GridMark {
@@ -129,11 +125,10 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
             .take_while(|m| m.step_size >= input.base_step_size)
             .take_while(|m| m.value <= max_y);
 
+        let prev_len = marks.len();
         marks.extend(new_marks);
 
-        log::trace!("Linear: {}", marks.len());
-
-        span -= 1.0;
+        log::trace!("Linear (span {span}): {}", marks.len() - prev_len);
     }
 
     marks.sort_by(|a, b| {
