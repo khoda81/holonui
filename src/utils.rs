@@ -94,9 +94,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         log::trace!("Log   : {}, step_size: {}", marks.len(), step_size);
         marks.extend(log_marks(step_size, min_y).take_while(|m| m.value <= max_y));
 
-        // Break when the step size is larger than the screen span.
-        // We multiply by 2.0 to ensure egui has one level larger than the screen
-        // to handle cross-fading gracefully.
+        // TODO: This is incorrect
         if step_size > view_span * 2.0 {
             break;
         }
@@ -104,35 +102,33 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         step_size *= 2.0;
     }
 
-    // Lower scales
-    let max_visible_x = (0.5 / input.base_step_size).floor() as u64;
+    // x <= 0.5 / step_size
+    let max_x = (0.5 / input.base_step_size) as u64;
 
-    for x in (1..max_visible_x).rev() {
+    for x in 1..=max_x {
         let x_f64 = x as f64;
         let step_size = 0.5 / x_f64;
 
-        // The value is: offset + span
         let offset = x_f64.ln() / ln_base;
 
-        // We only want marks visible on the screen:
-        // min_y <= offset + span <= max_y
-        // Therefore: min_y - offset <= span <= max_y - offset
+        // min_y < span + offset < max_y
+        // min_y - offset < span < max_y - offset
         let start_span = (min_y - offset).ceil() as i32;
-        let end_span = (max_y - offset).floor() as i32;
+        let end_span = (max_y - offset).ceil() as i32;
 
-        let new_marks = (start_span..=end_span).map(move |span| GridMark {
+        let new_marks = (start_span..end_span).map(|span| GridMark {
             value: offset + (span as f64),
             step_size,
         });
 
         marks.extend(new_marks);
 
-        if start_span <= end_span {
-            log::trace!("New Marks: {} (x={})", end_span - start_span + 1, x)
+        if start_span < end_span {
+            log::trace!("Span: {:?}", start_span..end_span)
         }
     }
 
-    log::trace!("Total Marks: {}", marks.len());
+    log::debug!("Total Marks: {}", marks.len());
 
     marks.sort_by(|a, b| {
         a.value
@@ -143,7 +139,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     // TODO: Compare using an epsilon instead as we are dealing with floats
     // marks.dedup_by(|a, b| (a.value / b.value).log10().abs() < 1e-10);
     marks.dedup_by_key(|m| m.value);
-    log::trace!("Deduped: {}", marks.len());
+    log::debug!("Deduped: {}", marks.len());
 
     marks
 }
