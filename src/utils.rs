@@ -1,9 +1,6 @@
 use core::f64;
 use egui_plot::{GridInput, GridMark};
-use std::{
-    ops::{Div, Sub},
-    time::Duration,
-};
+use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_task<F>(future: F)
@@ -122,25 +119,24 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     let mut x_start_f64 = ((min_y - start_span as f64) * ln_base).exp();
 
     for span in start_span..end_span {
-        let log_max_x = max_y - span as f64;
-
         // Clamp to our valid x range [2, max_x]
         // Find bounds in float space
         let start_x_f64 = x_start_f64.max(2.0).ceil();
+        let mut prev_value = (start_x_f64 - 1.0).ln() * inv_ln_base + span as f64;
         for idx_m1 in -1.. {
             let value = (start_x_f64 + idx_m1 as f64).ln_1p() * inv_ln_base + span as f64;
-            let prev_value = (start_x_f64 + idx_m1 as f64).ln() * inv_ln_base + span as f64;
 
             let mark = GridMark {
                 value,
                 step_size: value - prev_value,
             };
 
-            if max_y < value || mark.step_size < input.base_step_size {
+            if max_y < mark.value || mark.step_size < input.base_step_size {
                 break;
             }
 
             marks.push(mark);
+            prev_value = value;
         }
 
         x_start_f64 /= base;
