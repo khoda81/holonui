@@ -103,30 +103,42 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     }
 
     // x <= 0.5 / step_size
-    let max_x = (0.5 / input.base_step_size) as u64;
+    let max_x = 0.5 / input.base_step_size;
+    let max_offset = max_x.ln() / ln_base;
 
-    for x in 1..=max_x {
-        let x_f64 = x as f64;
-        let step_size = 0.5 / x_f64;
+    // span + offset must be between min_y and max_y.
+    // Since offset goes from 0 to max_offset:
+    let start_span = (min_y - max_offset).ceil() as i32;
+    let end_span = max_y.ceil() as i32;
 
-        let offset = x_f64.ln() / ln_base;
+    // min_y <= span + offset <= max_y
+    // min_y - span <= offset <= max_y - span
+    // Since offset = ln(x) / ln_base  =>  x = exp(offset * ln_base)
+    let mut min_x_f64 = ((min_y - start_span as f64) * ln_base).exp();
+    let mut max_x_f64 = ((max_y - start_span as f64) * ln_base).exp();
 
-        // min_y < span + offset < max_y
-        // min_y - offset < span < max_y - offset
-        let start_span = (min_y - offset).ceil() as i32;
-        let end_span = (max_y - offset).ceil() as i32;
+    for span in start_span..end_span {
+        let span_f64 = span as f64;
 
-        let new_marks = (start_span..end_span).map(|span| GridMark {
-            value: offset + (span as f64),
-            step_size,
+        // let min_x_f64 = (min_y * ln_base).exp() / base.powi(span);
+        // let max_x_f64 = (max_y * ln_base).exp() / base.powi(span);
+
+        // Clamp to our valid x range [1, max_x]
+        let start_x = min_x_f64.ceil().max(2.0) as u64;
+        let end_x = max_x_f64.floor().min(max_x) as u64;
+
+        min_x_f64 /= base;
+        max_x_f64 /= base;
+
+        let new_marks = (start_x..=end_x).map(move |x| GridMark {
+            value: span_f64 + (x as f64).ln() / ln_base,
+            step_size: 0.5 / x as f64,
         });
 
         marks.extend(new_marks);
-
-        if start_span < end_span {
-            log::trace!("Span: {:?}", start_span..end_span)
-        }
     }
+
+    log::trace!("Span: {:?}", start_span..end_span);
 
     log::debug!("Total Marks: {}", marks.len());
 
