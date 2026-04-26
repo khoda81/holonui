@@ -90,7 +90,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     log::trace!("Span: {span}");
     let mut step_size = 10f64.powf(span);
     loop {
-        marks.extend(linear_marks(step_size, &input).take(10));
+        marks.extend(linear_marks(step_size, &input));
 
         if step_size < input.base_step_size {
             break;
@@ -122,7 +122,7 @@ fn linear_marks(step_size: f64, input: &GridInput) -> impl Iterator<Item = GridM
     // Clamp min_x to 1 to avoid log10(0) which results in -Infinity.
     let min_x = (min_linear.floor() as i64).max(1);
     let max_x = max_linear.ceil() as i64;
-    let size_bound = (step_size * 0.5 / input.base_step_size).ceil() as usize;
+    let size_bound = (0.5 / input.base_step_size).ceil() as usize;
     // let max_x = max_x.min(size_bound as i32);
 
     log::trace!("--------------- {min_x}, {max_x}");
@@ -131,7 +131,8 @@ fn linear_marks(step_size: f64, input: &GridInput) -> impl Iterator<Item = GridM
 
     (min_x..=max_x).take(size_bound).map(move |x| GridMark {
         value: (x as f64 * step_size).log10(),
-        step_size: step_size * 0.5 / x as f64,
+        // FIX: Provide a relative log-space distance for egui's crossfading algorithm
+        step_size: 0.5 / x as f64,
     })
 }
 
