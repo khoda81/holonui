@@ -1,14 +1,11 @@
 pub mod models;
 
 use super::{
-    backend::models::{ApiFailure, ApiResponse},
-    plot::OrderFrontier,
+    X, Y,
+    plot::{Allocation, OrderFrontier, Trajectory},
 };
-use crate::{
-    app::plot::{Allocation, Trajectory},
-    utils::{get_api_key, sleep_async, spawn_task},
-};
-use models::{OrderPage, TradesPage, WalletsResponse};
+use crate::utils::{get_api_key, sleep_async, spawn_task};
+use models::{ApiFailure, ApiResponse, OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
@@ -18,9 +15,6 @@ use tokio::sync::{RwLock, mpsc as tmpsc};
 use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
-// TODO: These should be runtime vars
-const X: &str = "usdt";
-const Y: &str = "rls";
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Error, Debug)]

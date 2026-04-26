@@ -7,6 +7,10 @@ use chrono::Utc;
 use plot::ChartState;
 use tokio::sync::mpsc::{self as tmpsc, error::TrySendError};
 
+// TODO: These should be runtime vars
+const X: &str = "usdt";
+const Y: &str = "rls";
+
 #[derive(Clone, Copy, Debug, Default)]
 enum AppMode {
     #[default]
@@ -125,7 +129,7 @@ impl HolonApp {
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             let now = Utc::now();
-            let mut context = plot::PlotContext::new(self.mode, now, &self.anchor);
+            let mut context = plot::PlotContext::new(self.mode, now, &self.anchor, (X, Y));
             if self.show_trajectory {
                 context.trajectory = &self.trajectory;
             }

@@ -91,16 +91,23 @@ pub struct PlotContext<'f> {
     pub orders: &'f OrderFrontier,
     pub trajectory: &'f [TradeSegment],
     pub anchor: &'f Allocation,
+    pub axis_names: (&'f str, &'f str),
 }
 
 impl<'f> PlotContext<'f> {
-    pub fn new(mode: AppMode, now: DateTime<Utc>, anchor: &'f Allocation) -> Self {
+    pub fn new(
+        mode: AppMode,
+        now: DateTime<Utc>,
+        anchor: &'f Allocation,
+        axis_names: (&'f str, &'f str),
+    ) -> Self {
         Self {
             mode,
             now,
             orders: const { &OrderFrontier::EMPTY },
             trajectory: &[],
             anchor,
+            axis_names,
         }
     }
 
@@ -204,9 +211,11 @@ impl ChartState {
         let positive_only_grid = self.positive_only_grid;
         let log_grid_spacing = self.log_grid_spacing;
 
-        Plot::new("skyline_plot")
+        let mut plot = Plot::new("skyline_plot")
+            .x_axis_label(ctx.axis_names.0)
+            .y_axis_label(ctx.axis_names.1)
             .show_grid(true)
-            .legend(egui_plot::Legend::default())
+            .legend(egui_plot::Legend::default().hidden_items([]))
             .auto_bounds(false)
             .allow_double_click_reset(false)
             .x_grid_spacer(move |input| {
@@ -225,7 +234,7 @@ impl ChartState {
             })
             .x_axis_formatter(|mark, _range| {
                 if log_grid_spacing {
-                    // TODO: We should pass the numbers in logspace to the formatter
+                    // TODO: We should pass the numbers in logspace to the formatter for better precision?
                     format_human_num(
                         (mark.value * 10.0_f64.ln()).exp(),
                         (mark.value * 10.0_f64.ln()).exp(),
@@ -243,37 +252,42 @@ impl ChartState {
                 } else {
                     format_human_num(mark.value, mark.step_size)
                 }
-            })
-            .show(ui, |ui| {
-                if ui.response().double_clicked() || self.bounds_need_update {
-                    let mut bounds = ctx.order_frontier_bounds();
-                    let mut min = bounds.min();
-                    let mut max = bounds.max();
-                    log::trace!("Min: {min:?}, Max: {max:?}");
-                    if self.log_grid_spacing {
-                        min.to_logspace();
-                        max.to_logspace();
-                        bounds = PlotBounds::from_min_max(min, max);
-                        log::trace!("Updated Min: {min:?}, Max: {max:?}");
+            });
 
-                        bounds.expand_x(bounds.width() * 0.06);
-                        bounds.expand_y(bounds.height() * 0.06);
-                    } else {
-                        bounds.expand_x(bounds.width() * 0.06);
-                        bounds.expand_y(bounds.height() * 0.06);
+        if self.log_grid_spacing {
+            plot = plot.data_aspect(1.0);
+        }
 
-                        if !ctx.orders.bids.is_empty() || !ctx.orders.asks.is_empty() {
-                            bounds.extend_with(&PlotPoint::new(0.0, 0.0));
-                        }
+        plot.show(ui, |ui| {
+            if ui.response().double_clicked() || self.bounds_need_update {
+                let mut bounds = ctx.order_frontier_bounds();
+                let mut min = bounds.min();
+                let mut max = bounds.max();
+                log::trace!("Min: {min:?}, Max: {max:?}");
+                if self.log_grid_spacing {
+                    min.to_logspace();
+                    max.to_logspace();
+                    bounds = PlotBounds::from_min_max(min, max);
+                    log::trace!("Updated Min: {min:?}, Max: {max:?}");
+
+                    bounds.expand_x(bounds.width() * 0.06);
+                    bounds.expand_y(bounds.height() * 0.06);
+                } else {
+                    bounds.expand_x(bounds.width() * 0.06);
+                    bounds.expand_y(bounds.height() * 0.06);
+
+                    if !ctx.orders.bids.is_empty() || !ctx.orders.asks.is_empty() {
+                        bounds.extend_with(&PlotPoint::new(0.0, 0.0));
                     }
-
-                    self.bounds_need_update = false;
-
-                    ui.set_plot_bounds(bounds);
                 }
 
-                self.render_plot_contents(ui, ctx)
-            })
+                self.bounds_need_update = false;
+
+                ui.set_plot_bounds(bounds);
+            }
+
+            self.render_plot_contents(ui, ctx)
+        })
     }
 
     fn render_plot_contents(
@@ -282,10 +296,8 @@ impl ChartState {
         ctx: PlotContext<'_>,
     ) -> PlotPanelResponse {
         // TODO: In log coordinate the aspect ratio should be always 1
-        // TODO: The numbers should be human readable formatted instead of 80000000 we should have 80M
         // TODO: Draw the budget line passing through anchor, highlighted point
 
-        // TODO: Can we label the axis with the currency name?
         // TODO: How do we hide the legend for these?
         // Make the real origin axes obvious.
         ui.hline(

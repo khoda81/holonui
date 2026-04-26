@@ -1,5 +1,5 @@
 use egui_plot::{GridInput, GridMark};
-use std::{ops::RangeInclusive, time::Duration};
+use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_task<F>(future: F)
@@ -51,6 +51,10 @@ pub fn format_human_num(num: f64, scale: f64) -> String {
         return String::new();
     }
 
+    fn keep_4_significant_digits(num: f64) -> f64 {
+        (num * 1e3).round() / 1e3
+    }
+
     match scale {
         ..1e-3 => format!("{:4.0e}", num),
         ..1e3 => format!("{:4}", keep_4_significant_digits(num)),
@@ -58,12 +62,8 @@ pub fn format_human_num(num: f64, scale: f64) -> String {
         ..1e9 => format!("{:4}M", keep_4_significant_digits(num / 1e6)),
         ..1e12 => format!("{:4}B", keep_4_significant_digits(num / 1e9)),
         ..1e15 => format!("{:4}T", keep_4_significant_digits(num / 1e12)),
-        _ => format!("{:4.0e}", keep_4_significant_digits(num)),
+        _ => format!("{:4.0e}", num),
     }
-}
-
-fn keep_4_significant_digits(num: f64) -> f64 {
-    (num * 1e3).round() / 1e3
 }
 
 pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
@@ -123,10 +123,9 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
 
         // Do all clamping in f64 space.
         // Cap max_x at max_visible_x because anything beyond that has 0 opacity anyway.
-        let min_x = (min_linear.ceil() as u32).max(1);
-
         // Only cast to u32 now that we know the values are small and finite
         // If min_x > max_x (e.g. out of bounds), this naturally yields an empty iterator.
+        let min_x = (min_linear.ceil() as u32).max(1);
 
         let new_marks = (min_x..)
             .map(move |x| GridMark {
