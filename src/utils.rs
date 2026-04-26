@@ -67,16 +67,22 @@ fn keep_4_significant_digits(num: f64) -> f64 {
 }
 
 pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
+    let base = 10f64;
+    let ln_base = base.ln();
+
     let mut marks = Vec::new();
 
     let (min_y, max_y) = input.bounds;
 
     // Upper scales
-    marks.extend(log_marks(1.0, min_y..=max_y));
+    marks.extend(log_marks(1.0, min_y).take_while(|m| m.value <= max_y));
     let mut step_size = 3.0;
     loop {
         let prev_len = marks.len();
-        marks.extend(log_marks(step_size, min_y..=max_y));
+
+        log::trace!("Log   : {}", marks.len());
+        marks.extend(log_marks(step_size, min_y).take_while(|m| m.value <= max_y));
+
         // TODO: We should probably use a better condition here
         if marks.len() <= prev_len + 3 {
             break;
@@ -86,66 +92,70 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     }
 
     // Lower scales
-    let span = max_y.ceil();
+    let mut span = max_y.floor();
 
     log::trace!("Span: {span}, Base Step: {}", input.base_step_size);
 
-    // Calculate the maximum 'x' multiplier egui will actually render before fading to 0
-    let max_visible_x = (0.5 / input.base_step_size).ceil() as i64;
+    // The maximum `x` multiplier before lines fade to invisible
+    let max_visible_x = 0.5 / input.base_step_size;
 
-    let mut step_size = 10f64.powf(span);
     loop {
-        // Find where this layer starts in the current view
-        let min_linear = 10_f64.powf(min_y) / step_size;
-        let min_x = (min_linear.floor() as i64).max(1);
+        let step_size = 10f64.powf(span);
+        let min_linear = 10f64.powf(min_y - span);
 
-        // If the start of the layer is too dense, the whole layer (and all deeper layers) are invisible.
-        if min_x > max_visible_x {
+        // Break if we hit Infinity (zoomed out too far for f64)
+        // or if the starting line is already too dense to be visible
+        if !min_linear.is_finite() || min_linear > max_visible_x {
             break;
         }
 
-        marks.extend(linear_marks(step_size, &input));
-        step_size /= 10.0;
+        marks.extend(
+            linear_marks(step_size, ln_base, min_y)
+                .take_while(|m| m.step_size >= input.base_step_size)
+                .take_while(|m| m.value <= max_y),
+        );
+
+        log::trace!("Linear: {}", marks.len());
+
+        span -= 1.0;
     }
+
+    marks.sort_by(|a, b| {
+        a.value
+            .total_cmp(&b.value)
+            .then(b.step_size.total_cmp(&a.step_size))
+    });
+
+    // TODO: Compare using an epsilon instead as we are dealing with floats
+    marks.dedup_by_key(|m| m.value);
 
     marks
 }
 
-fn log_marks(step_size: f64, bounds_range: RangeInclusive<f64>) -> impl Iterator<Item = GridMark> {
-    let min_power = (bounds_range.start() / step_size).floor() as i32;
-    let max_power = (bounds_range.end() / step_size).ceil() as i32;
+fn log_marks(step_size: f64, min_y: f64) -> impl Iterator<Item = GridMark> {
+    let min_power = (min_y / step_size).ceil() as i32;
 
-    (min_power..=max_power).map(move |power| GridMark {
+    (min_power..).map(move |power| GridMark {
         value: (power as f64) * step_size,
         step_size,
     })
 }
 
-fn linear_marks(step_size: f64, input: &GridInput) -> impl Iterator<Item = GridMark> {
-    let (start, end) = input.bounds;
-    // Convert log-space bounds back to linear space to find the x indices
-    let min_linear = 10_f64.powf(start) / step_size;
-    let max_linear = 10_f64.powf(end) / step_size;
+fn linear_marks(step_size: f64, ln_base: f64, min_y: f64) -> impl Iterator<Item = GridMark> {
+    // DO the compute in log space
+    let min_linear = (min_y * ln_base).exp() / step_size;
 
-    // Floor the min and ceil the max to ensure we cover the edges.
-    // Clamp min_x to 1 to avoid log10(0) which results in -Infinity.
-    let min_x = (min_linear.floor() as i64).max(1);
-    let max_x: i64 = max_linear.ceil() as i64;
-    let size_bound = (0.5 / input.base_step_size).ceil() as usize;
-    // let max_x = max_x.min(size_bound as i32);
+    // Do all clamping in f64 space.
+    // Cap max_x at max_visible_x because anything beyond that has 0 opacity anyway.
+    let min_x = (min_linear.ceil() as u32).max(1);
 
-    log::trace!("--------------- {min_x}, {max_x}");
-
-    if max_x == 0 {
-        panic!()
-    }
-
-    // step_size * 0.5 / base_step_size > x
-
-    (min_x..=max_x).take(size_bound).map(move |x| GridMark {
+    // Only cast to u32 now that we know the values are small and finite
+    // If min_x > max_x (e.g. out of bounds), this naturally yields an empty iterator.
+    (min_x..).map(move |x| GridMark {
         value: (x as f64 * step_size).log10(),
-        // FIX: Provide a relative log-space distance for egui's crossfading algorithm
-        step_size: 0.5 / x as f64,
+        // TODO: This unfortunately produces less precise values and I am not sure how to fix that
+        // value: (x as f64 * step_size).ln() / ln_base,
+        step_size: 0.5 / (x as f64),
     })
 }
 
