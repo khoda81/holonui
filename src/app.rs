@@ -4,6 +4,7 @@ mod plot;
 use crate::utils::format_humantime;
 use backend::{BackendCommand, BackendEvent, start_backend};
 use chrono::Utc;
+use egui::{Frame, Margin};
 use plot::ChartState;
 use tokio::sync::mpsc::{self as tmpsc, error::TrySendError};
 
@@ -119,7 +120,12 @@ impl HolonApp {
     }
 
     fn render_main_plot(&mut self, ui: &mut egui::Ui) {
+        let mut header_frame = Frame::side_top_panel(ui.style());
+        header_frame.inner_margin.bottom = 12;
+        header_frame.inner_margin.top = 12;
+
         egui::Panel::top("heading")
+            .frame(header_frame)
             .resizable(false)
             .show_inside(ui, |ui| ui.heading("HolonUI - Skyline Visualizer"));
 
@@ -149,32 +155,29 @@ impl HolonApp {
     fn show_chart_config(&mut self, ui: &mut egui::Ui) {
         // TODO: Store these configuration/settings in a persistent manner
         let mut time_unit_sec = self.chart.time_unit().as_seconds_f64();
-        ui.vertical(|ui| {
-            ui.label("Time Unit:");
-            ui.add(
-                egui::Slider::new(&mut time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
-                    .logarithmic(true)
-                    .custom_formatter(|sec, _| format_humantime(sec)),
-            );
-        });
+        ui.label("Time Unit:");
+        ui.add(
+            egui::Slider::new(&mut time_unit_sec, 1.0..=31_536_000.0) // 1 sec to 1 year
+                .logarithmic(true)
+                // TODO: This can use a custom parser for humantime
+                .custom_formatter(|sec, _| format_humantime(sec)),
+        );
 
         self.chart
             .set_time_unit(chrono::Duration::nanoseconds((time_unit_sec * 1e9) as i64));
 
-        ui.vertical(|ui| {
-            let prev_scaling = self.chart.log_grid_spacing;
-            ui.checkbox(&mut self.chart.log_grid_spacing, "Logarithmic Grid Spacing");
-            ui.checkbox(&mut self.chart.positive_only_grid, "Positive-Only Grid");
-            if self.chart.log_grid_spacing != prev_scaling {
-                // TODO: Instead of updating the bounds blindly, map the current bounds between exp/log space
-                self.chart.bounds_need_update = true;
-            }
-        });
+        let prev_scaling = self.chart.log_grid_spacing;
+        ui.checkbox(&mut self.chart.log_grid_spacing, "Logarithmic Grid Spacing");
+        ui.checkbox(&mut self.chart.positive_only_grid, "Positive-Only Grid");
+        if self.chart.log_grid_spacing != prev_scaling {
+            // TODO: Instead of updating the bounds blindly, map the current bounds between exp/log space
+            self.chart.bounds_need_update = true;
+        }
 
-        ui.vertical(|ui| {
-            ui.checkbox(&mut self.show_trajectory, "Show Trajectory");
-            ui.checkbox(&mut self.show_order_frontier, "Show Order Frontier");
-        });
+        ui.checkbox(&mut self.show_trajectory, "Show Trajectory");
+        ui.checkbox(&mut self.show_order_frontier, "Show Order Frontier");
+
+        ui.take_available_width();
     }
 
     fn set_backend_token(&self, token: String) -> Result<(), TrySendError<BackendCommand>> {
