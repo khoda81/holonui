@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
+use egui::Rangef;
 use egui_plot::{
-    GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints, PlotResponse,
-    Points, VLine,
+    AxisHints, GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints,
+    PlotResponse, Points, VLine,
 };
 
 use crate::{
@@ -214,6 +215,9 @@ impl ChartState {
         let mut plot = Plot::new("skyline_plot")
             .x_axis_label(ctx.axis_names.0)
             .y_axis_label(ctx.axis_names.1)
+            .custom_x_axes(vec![
+                AxisHints::new_x().label_spacing(Rangef::new(30.0, 80.0)),
+            ])
             .show_grid(true)
             .legend(egui_plot::Legend::default().hidden_items([]))
             .auto_bounds(false)
