@@ -117,28 +117,34 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     let mut min_x_f64 = ((min_y - start_span as f64) * ln_base).exp();
     let mut max_x_f64 = ((max_y - start_span as f64) * ln_base).exp();
 
+    log::trace!("Span: {:?}", start_span..end_span);
+
     for span in start_span..end_span {
-        let span_f64 = span as f64;
+        // Clamp to our valid x range [2, max_x]
+        // Find bounds in float space
+        let start_x_f64 = min_x_f64.max(2.0).ceil();
+        let max_x = max_x_f64.min(max_x);
 
-        // let min_x_f64 = (min_y * ln_base).exp() / base.powi(span);
-        // let max_x_f64 = (max_y * ln_base).exp() / base.powi(span);
-
-        // Clamp to our valid x range [1, max_x]
-        let start_x = min_x_f64.ceil().max(2.0) as u64;
-        let end_x = max_x_f64.floor().min(max_x) as u64;
+        let new_marks = (0..)
+            .map(|idx| start_x_f64 + idx as f64)
+            .take_while(|x| *x < max_x)
+            .map(|x| GridMark {
+                value: span as f64 + x.ln() / ln_base,
+                step_size: 0.5 / x,
+            });
 
         min_x_f64 /= base;
         max_x_f64 /= base;
 
-        let new_marks = (start_x..=end_x).map(move |x| GridMark {
-            value: span_f64 + (x as f64).ln() / ln_base,
-            step_size: 0.5 / x as f64,
-        });
+        // Calculate the number of steps.
+        // The subtraction happens in f64 space, safely avoiding integer overflow.
+        let x_count = (max_x - start_x_f64) as u32;
+
+        log::trace!("count: {x_count:4}, X: {:?}", start_x_f64..);
+        std::thread::sleep(std::time::Duration::from_secs_f64(0.01));
 
         marks.extend(new_marks);
     }
-
-    log::trace!("Span: {:?}", start_span..end_span);
 
     log::debug!("Total Marks: {}", marks.len());
 
