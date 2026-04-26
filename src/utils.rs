@@ -67,9 +67,8 @@ pub fn format_human_num(num: f64, scale: f64) -> String {
     }
 }
 
-pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
-    let base = 10f64;
-    let ln_base = f64::consts::LN_10;
+pub fn log_ln_grid_spacer(input: GridInput, ln_base: f64) -> Vec<GridMark> {
+    let base = ln_base.exp();
     let inv_ln_base = ln_base.recip();
 
     fn log_marks(step_size: f64, min_y: f64) -> impl Iterator<Item = GridMark> {
@@ -89,14 +88,9 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     let mut step_size = 3.0;
     let view_span = max_y - min_y;
 
-    loop {
+    // TODO: This is incorrect, we should reverse this loop
+    while step_size <= view_span * 2.0 {
         marks.extend(log_marks(step_size, min_y).take_while(|m| m.value <= max_y));
-
-        // Break when step_size is large enough to span twice the visible area,
-        // ensuring enough major ticks exist for smooth cross-fading.
-        if step_size > view_span * 2.0 {
-            break;
-        }
 
         step_size *= 2.0;
     }

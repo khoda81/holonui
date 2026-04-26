@@ -1,3 +1,5 @@
+use std::f64;
+
 use chrono::{DateTime, Utc};
 use egui::Rangef;
 use egui_plot::{
@@ -7,7 +9,7 @@ use egui_plot::{
 
 use crate::{
     app::backend::models::Trade,
-    utils::{format_human_num, log10_grid_spacer},
+    utils::{format_human_num, log_ln_grid_spacer},
 };
 
 use super::{
@@ -147,17 +149,20 @@ pub struct ChartState {
     pub bounds_need_update: bool,
 }
 
-fn grid_marks(input: GridInput, positive_only: bool) -> Vec<GridMark> {
-    // TODO: How does grid spacer work in egui?
-    let spacer = egui_plot::log_grid_spacer(10);
-
-    let mut marks = spacer(input);
-
-    if positive_only {
-        marks.retain_mut(|mark| mark.value >= 0.0)
+fn grid_marks(
+    positive_only: bool,
+    log_grid_spacing: bool,
+) -> Box<dyn Fn(GridInput) -> Vec<GridMark> + 'static> {
+    if log_grid_spacing {
+        Box::new(|input| log_ln_grid_spacer(input, f64::consts::LN_10))
+    } else if positive_only {
+        Box::new(|mut input| {
+            input.bounds.0 = input.bounds.0.max(0.0);
+            egui_plot::log_grid_spacer(10)(input)
+        })
+    } else {
+        egui_plot::log_grid_spacer(10)
     }
-
-    marks
 }
 
 trait ToLogSpace {
@@ -214,20 +219,8 @@ impl ChartState {
             .legend(egui_plot::Legend::default())
             .auto_bounds(false)
             .allow_double_click_reset(false)
-            .x_grid_spacer(move |input| {
-                if log_grid_spacing {
-                    log10_grid_spacer(input)
-                } else {
-                    grid_marks(input, positive_only_grid)
-                }
-            })
-            .y_grid_spacer(move |input| {
-                if log_grid_spacing {
-                    log10_grid_spacer(input)
-                } else {
-                    grid_marks(input, positive_only_grid)
-                }
-            })
+            .x_grid_spacer(grid_marks(positive_only_grid, log_grid_spacing))
+            .y_grid_spacer(grid_marks(positive_only_grid, log_grid_spacing))
             .x_axis_formatter(|mark, _range| {
                 if log_grid_spacing {
                     // TODO: We should pass the numbers in logspace to the formatter for better precision?
