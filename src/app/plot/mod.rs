@@ -1,4 +1,5 @@
-use std::f64;
+use core::range::RangeInclusive;
+use std::f64::consts::LN_10;
 
 use chrono::{DateTime, Utc};
 use egui::Rangef;
@@ -154,7 +155,7 @@ fn grid_marks(
     log_grid_spacing: bool,
 ) -> Box<dyn Fn(GridInput) -> Vec<GridMark> + 'static> {
     if log_grid_spacing {
-        Box::new(|input| log_ln_grid_spacer(input, f64::consts::LN_10))
+        Box::new(|input| log_ln_grid_spacer(input, LN_10))
     } else if positive_only {
         Box::new(|mut input| {
             input.bounds.0 = input.bounds.0.max(0.0);
@@ -162,6 +163,15 @@ fn grid_marks(
         })
     } else {
         egui_plot::log_grid_spacer(10)
+    }
+}
+
+fn axis_formatter(log_grid_spacing: bool, mark: GridMark) -> String {
+    if log_grid_spacing {
+        // TODO: We should pass the numbers in logspace to the formatter for better precision?
+        format_human_num((mark.value * LN_10).exp(), (mark.value * LN_10).exp())
+    } else {
+        format_human_num(mark.value, mark.step_size)
     }
 }
 
@@ -221,27 +231,8 @@ impl ChartState {
             .allow_double_click_reset(false)
             .x_grid_spacer(grid_marks(positive_only_grid, log_grid_spacing))
             .y_grid_spacer(grid_marks(positive_only_grid, log_grid_spacing))
-            .x_axis_formatter(|mark, _range| {
-                if log_grid_spacing {
-                    // TODO: We should pass the numbers in logspace to the formatter for better precision?
-                    format_human_num(
-                        (mark.value * 10.0_f64.ln()).exp(),
-                        (mark.value * 10.0_f64.ln()).exp(),
-                    )
-                } else {
-                    format_human_num(mark.value, mark.step_size)
-                }
-            })
-            .y_axis_formatter(|mark, _range| {
-                if log_grid_spacing {
-                    format_human_num(
-                        (mark.value * 10.0_f64.ln()).exp(),
-                        (mark.value * 10.0_f64.ln()).exp(),
-                    )
-                } else {
-                    format_human_num(mark.value, mark.step_size)
-                }
-            });
+            .x_axis_formatter(|m, _| axis_formatter(log_grid_spacing, m))
+            .y_axis_formatter(|m, _| axis_formatter(log_grid_spacing, m));
 
         if self.log_grid_spacing {
             plot = plot.data_aspect(1.0);
