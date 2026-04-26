@@ -1,6 +1,9 @@
 use core::f64;
 use egui_plot::{GridInput, GridMark};
-use std::{ops::Div, time::Duration};
+use std::{
+    ops::{Div, Sub},
+    time::Duration,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_task<F>(future: F)
@@ -105,8 +108,8 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
 
     let transition_point = 0.6;
     // x <= 0.5 / step_size
-    let max_x = transition_point / input.base_step_size;
-    let max_offset = max_x.ln() / ln_base;
+    let ln_max_x = (transition_point / input.base_step_size).ln();
+    let max_offset = ln_max_x / ln_base;
 
     // span + offset must be between min_y and max_y.
     // Since offset goes from 0 to max_offset:
@@ -116,35 +119,40 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     // min_y <= span + offset <= max_y
     // min_y - span <= offset <= max_y - span
     // Since offset = ln(x) / ln_base  =>  x = exp(offset * ln_base)
-    let mut min_x_f64 = ((min_y - start_span as f64) * ln_base).exp();
-    let mut max_x_f64 = ((max_y - start_span as f64) * ln_base).exp();
 
     log::trace!("Span: {:?}", start_span..end_span);
 
+    let mut x_start_f64 = ((min_y - start_span as f64) * ln_base).exp();
+
     for span in start_span..end_span {
+        let ln_max_x_f64 = (max_y - span as f64) * ln_base;
+
         // Clamp to our valid x range [2, max_x]
         // Find bounds in float space
-        let start_x_f64 = min_x_f64.max(2.0).ceil();
-        let max_x = max_x_f64.min(max_x);
+        let start_x_f64 = x_start_f64.max(2.0).ceil();
+        for idx_m1 in -1.. {
+            let ln_x = (start_x_f64 + (idx_m1 + 1) as f64).ln();
+            let ln_1sx = (start_x_f64 + idx_m1 as f64).ln();
 
-        let new_marks = (0..)
-            .map(|idx| start_x_f64 + idx as f64)
-            .take_while(|x| *x < max_x)
-            .map(|x| GridMark {
-                value: span as f64 + x.ln().div(ln_base),
-                step_size: (x).div(x - 1.0).ln().div(ln_base),
-            });
+            if ln_x > ln_max_x_f64.min(ln_max_x) {
+                break;
+            }
 
-        min_x_f64 /= base;
-        max_x_f64 /= base;
+            let mark = GridMark {
+                value: span as f64 + ln_x.div(ln_base),
+                step_size: (ln_x - ln_1sx).div(ln_base),
+            };
+
+            marks.push(mark);
+        }
+
+        x_start_f64 /= base;
 
         // Calculate the number of steps.
         // The subtraction happens in f64 space, safely avoiding integer overflow.
-        let x_count = (max_x - start_x_f64) as u32;
+        let x_count = (ln_max_x_f64.min(ln_max_x).exp() - start_x_f64) as u32;
 
         log::trace!("count: {x_count:4}, X: {:?}", start_x_f64..);
-
-        marks.extend(new_marks);
     }
 
     log::debug!("Total Marks: {}", marks.len());
