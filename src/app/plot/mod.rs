@@ -293,17 +293,19 @@ impl ChartState {
     ) -> PlotPanelResponse {
         // TODO: Draw the budget line passing through anchor, highlighted point
 
-        // Make the real origin axes obvious.
-        ui.hline(
-            HLine::new("Y = 0", 0.0)
-                .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
-                .width(2.2),
-        );
-        ui.vline(
-            VLine::new("X = 0", 0.0)
-                .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
-                .width(2.2),
-        );
+        if !self.log_grid_spacing {
+            // Make the real origin axes obvious.
+            ui.hline(
+                HLine::new("Y = 0", 0.0)
+                    .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
+                    .width(2.2),
+            );
+            ui.vline(
+                VLine::new("X = 0", 0.0)
+                    .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
+                    .width(2.2),
+            );
+        }
 
         let mut current_point = *ctx.anchor;
         // Draw trajectory as age-faded segments in one color family.

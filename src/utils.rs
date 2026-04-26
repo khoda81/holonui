@@ -93,7 +93,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         marks.extend(log_marks(step_size, min_y).take_while(|m| m.value <= max_y));
 
         // TODO: We should probably use a better condition here
-        if marks.len() <= prev_len + 3 {
+        if marks.len() <= prev_len {
             break;
         }
 
@@ -106,32 +106,24 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     log::trace!("Span: {span}, Base Step: {}", input.base_step_size);
 
     // The maximum `x` multiplier before lines fade to invisible
-    let max_visible_x = 0.5 / input.base_step_size;
-
     loop {
-        let step_size = base.powf(span);
         let min_linear = base.powf(min_y - span);
 
         // Break if we hit Infinity (zoomed out too far for f64)
         // or if the starting line is already too dense to be visible
-        if !min_linear.is_finite() || min_linear > max_visible_x {
+        if 0.5 / min_linear < input.base_step_size {
             break;
         }
-
-        // Do the compute in log space
-        let min_linear = (min_y * ln_base).exp() / step_size;
 
         // Do all clamping in f64 space.
         // Cap max_x at max_visible_x because anything beyond that has 0 opacity anyway.
         // Only cast to u32 now that we know the values are small and finite
         // If min_x > max_x (e.g. out of bounds), this naturally yields an empty iterator.
-        let min_x = (min_linear.ceil() as u32).max(1);
+        let min_x = min_linear.ceil() as u64;
 
         let new_marks = (min_x..)
             .map(move |x| GridMark {
-                value: (x as f64 * step_size).log10(),
-                // TODO: This unfortunately produces less precise values and I am not sure how to fix that
-                // value: (x as f64 * step_size).ln() / ln_base,
+                value: (x as f64).ln() / ln_base + span,
                 step_size: 0.5 / (x as f64),
             })
             .take_while(|m| m.step_size >= input.base_step_size)
