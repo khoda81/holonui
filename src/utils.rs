@@ -82,21 +82,18 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     }
 
     let mut marks = Vec::new();
-
     let (min_y, max_y) = input.bounds;
 
-    // Upper scales
+    // Upper scales (Major ticks)
     marks.extend(log_marks(1.0, min_y).take_while(|m| m.value <= max_y));
     let mut step_size = 3.0;
-
-    // Calculate the visible span
     let view_span = max_y - min_y;
 
     loop {
-        log::trace!("Log   : {}, step_size: {}", marks.len(), step_size);
         marks.extend(log_marks(step_size, min_y).take_while(|m| m.value <= max_y));
 
-        // TODO: This is incorrect
+        // Break when step_size is large enough to span twice the visible area,
+        // ensuring enough major ticks exist for smooth cross-fading.
         if step_size > view_span * 2.0 {
             break;
         }
@@ -104,23 +101,16 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         step_size *= 2.0;
     }
 
+    // Sub-scales (Minor ticks between powers)
     // span + offset must be between min_y and max_y.
     let offset = input.base_step_size.ln() * inv_ln_base;
     let start_span = (min_y + offset).ceil();
     let end_span = max_y.ceil();
 
-    // min_y <= span + offset <= max_y
-    // min_y - span <= offset <= max_y - span
-    // Since offset = ln(x) / ln_base  =>  x = exp(offset * ln_base)
-
-    log::trace!("Span: {:?}", start_span..end_span);
-
-    // let mut x_start_f64 = input.base_step_size;
     let mut x_start_f64 = ((min_y - start_span) * ln_base).exp();
 
     for span in start_span as i32..end_span as i32 {
-        // Clamp to our valid x range [2, max_x]
-        // Find bounds in float space
+        // Clamp to our valid $x$ range [2, base]
         let start_x_f64 = x_start_f64.max(2.0).ceil();
         let mut prev_value = (start_x_f64 - 1.0).ln() * inv_ln_base + span as f64;
 
