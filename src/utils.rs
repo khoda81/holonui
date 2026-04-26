@@ -123,6 +123,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         // Find bounds in float space
         let start_x_f64 = x_start_f64.max(2.0).ceil();
         let mut prev_value = (start_x_f64 - 1.0).ln() * inv_ln_base + span as f64;
+
         let new_marks = (-1..)
             .map(|idx| {
                 let value = (start_x_f64 + idx as f64).ln_1p() * inv_ln_base + span as f64;
@@ -131,20 +132,12 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
 
                 GridMark { value, step_size }
             })
-            .take_while(|mark| max_y >= mark.value && mark.step_size >= input.base_step_size);
+            .take_while(|mark| max_y >= mark.value)
+            .take_while(|mark| mark.step_size >= input.base_step_size);
 
         marks.extend(new_marks);
         x_start_f64 /= base;
-
-        let ln_max_x_f64 = (max_y - span as f64) * ln_base;
-        // Calculate the number of steps.
-        // The subtraction happens in f64 space, safely avoiding integer overflow.
-        let x_count = (ln_max_x_f64.min(-input.base_step_size.ln()).exp() - start_x_f64) as u32;
-
-        log::trace!("count: {x_count:4}, X: {:?}", start_x_f64..);
     }
-
-    log::debug!("Total Marks: {}", marks.len());
 
     marks.sort_by(|a, b| {
         a.value
