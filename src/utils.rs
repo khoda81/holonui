@@ -106,8 +106,8 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
 
     // span + offset must be between min_y and max_y.
     let offset = input.base_step_size.ln() * inv_ln_base;
-    let start_span = (min_y + offset).ceil() as i32;
-    let end_span = max_y.ceil() as i32;
+    let start_span = (min_y + offset).ceil();
+    let end_span = max_y.ceil();
 
     // min_y <= span + offset <= max_y
     // min_y - span <= offset <= max_y - span
@@ -116,29 +116,24 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     log::trace!("Span: {:?}", start_span..end_span);
 
     // let mut x_start_f64 = input.base_step_size;
-    let mut x_start_f64 = ((min_y - start_span as f64) * ln_base).exp();
+    let mut x_start_f64 = ((min_y - start_span) * ln_base).exp();
 
-    for span in start_span..end_span {
+    for span in start_span as i32..end_span as i32 {
         // Clamp to our valid x range [2, max_x]
         // Find bounds in float space
         let start_x_f64 = x_start_f64.max(2.0).ceil();
         let mut prev_value = (start_x_f64 - 1.0).ln() * inv_ln_base + span as f64;
-        for idx_m1 in -1.. {
-            let value = (start_x_f64 + idx_m1 as f64).ln_1p() * inv_ln_base + span as f64;
+        let new_marks = (-1..)
+            .map(|idx| {
+                let value = (start_x_f64 + idx as f64).ln_1p() * inv_ln_base + span as f64;
+                let step_size = value - prev_value;
+                prev_value = value;
 
-            let mark = GridMark {
-                value,
-                step_size: value - prev_value,
-            };
+                GridMark { value, step_size }
+            })
+            .take_while(|mark| max_y >= mark.value && mark.step_size >= input.base_step_size);
 
-            if max_y < mark.value || mark.step_size < input.base_step_size {
-                break;
-            }
-
-            marks.push(mark);
-            prev_value = value;
-        }
-
+        marks.extend(new_marks);
         x_start_f64 /= base;
 
         let ln_max_x_f64 = (max_y - span as f64) * ln_base;
