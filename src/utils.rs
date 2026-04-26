@@ -73,6 +73,7 @@ pub fn format_human_num(num: f64, scale: f64) -> String {
 pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     let base = 10f64;
     let ln_base = f64::consts::LN_10;
+    let inv_ln_base = ln_base.recip();
 
     fn log_marks(step_size: f64, min_y: f64) -> impl Iterator<Item = GridMark> {
         let min_power = (min_y / step_size).ceil() as i64;
@@ -106,12 +107,9 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         step_size *= 2.0;
     }
 
-    // x <= 0.5 / step_size
-    let max_offset = -input.base_step_size.ln() / ln_base;
-
     // span + offset must be between min_y and max_y.
-    // Since offset goes from 0 to max_offset:
-    let start_span = (min_y - max_offset).ceil() as i32;
+    let offset = input.base_step_size.ln() * inv_ln_base;
+    let start_span = (min_y + offset).ceil() as i32;
     let end_span = max_y.ceil() as i32;
 
     // min_y <= span + offset <= max_y
@@ -124,29 +122,30 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     let mut x_start_f64 = ((min_y - start_span as f64) * ln_base).exp();
 
     for span in start_span..end_span {
-        let ln_max_x_f64 = (max_y - span as f64) * ln_base;
+        let log_max_x = max_y - span as f64;
 
         // Clamp to our valid x range [2, max_x]
         // Find bounds in float space
         let start_x_f64 = x_start_f64.max(2.0).ceil();
         for idx_m1 in -1.. {
-            let ln_x = (start_x_f64 + (idx_m1 + 1) as f64).ln();
-            let ln_1sx = (start_x_f64 + idx_m1 as f64).ln();
-
-            if ln_x > ln_max_x_f64.min(-input.base_step_size.ln()) {
-                break;
-            }
+            let value = (start_x_f64 + idx_m1 as f64).ln_1p() * inv_ln_base + span as f64;
+            let prev_value = (start_x_f64 + idx_m1 as f64).ln() * inv_ln_base + span as f64;
 
             let mark = GridMark {
-                value: span as f64 + ln_x.div(ln_base),
-                step_size: (ln_x - ln_1sx).div(ln_base),
+                value,
+                step_size: value - prev_value,
             };
+
+            if max_y < value || mark.step_size < input.base_step_size {
+                break;
+            }
 
             marks.push(mark);
         }
 
         x_start_f64 /= base;
 
+        let ln_max_x_f64 = (max_y - span as f64) * ln_base;
         // Calculate the number of steps.
         // The subtraction happens in f64 space, safely avoiding integer overflow.
         let x_count = (ln_max_x_f64.min(-input.base_step_size.ln()).exp() - start_x_f64) as u32;
