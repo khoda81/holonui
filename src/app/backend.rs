@@ -278,6 +278,19 @@ impl RequestContext {
         }
 
         if !status.is_success() {
+            if let Ok(ApiResponse::<T>::Failed {
+                message,
+                code,
+                error,
+            }) = serde_json::from_str(&raw_text)
+            {
+                return Err(FetchError::APIError {
+                    message,
+                    error,
+                    code,
+                });
+            }
+
             return Err(FetchError::Http {
                 status,
                 body: raw_text,
