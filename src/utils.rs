@@ -1,5 +1,6 @@
+use core::f64;
 use egui_plot::{GridInput, GridMark};
-use std::time::Duration;
+use std::{ops::Div, time::Duration};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_task<F>(future: F)
@@ -68,7 +69,7 @@ pub fn format_human_num(num: f64, scale: f64) -> String {
 
 pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
     let base = 10f64;
-    let ln_base = base.ln();
+    let ln_base = f64::consts::LN_10;
 
     fn log_marks(step_size: f64, min_y: f64) -> impl Iterator<Item = GridMark> {
         let min_power = (min_y / step_size).ceil() as i64;
@@ -102,8 +103,9 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         step_size *= 2.0;
     }
 
+    let transition_point = 0.6;
     // x <= 0.5 / step_size
-    let max_x = 0.5 / input.base_step_size;
+    let max_x = transition_point / input.base_step_size;
     let max_offset = max_x.ln() / ln_base;
 
     // span + offset must be between min_y and max_y.
@@ -129,8 +131,8 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
             .map(|idx| start_x_f64 + idx as f64)
             .take_while(|x| *x < max_x)
             .map(|x| GridMark {
-                value: span as f64 + x.ln() / ln_base,
-                step_size: 0.5 / x,
+                value: span as f64 + x.ln().div(ln_base),
+                step_size: (x).div(x - 1.0).ln().div(ln_base),
             });
 
         min_x_f64 /= base;
@@ -141,7 +143,6 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         let x_count = (max_x - start_x_f64) as u32;
 
         log::trace!("count: {x_count:4}, X: {:?}", start_x_f64..);
-        std::thread::sleep(std::time::Duration::from_secs_f64(0.01));
 
         marks.extend(new_marks);
     }
