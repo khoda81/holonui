@@ -106,10 +106,8 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
         step_size *= 2.0;
     }
 
-    let transition_point = 0.6;
     // x <= 0.5 / step_size
-    let ln_max_x = (transition_point / input.base_step_size).ln();
-    let max_offset = ln_max_x / ln_base;
+    let max_offset = -input.base_step_size.ln() / ln_base;
 
     // span + offset must be between min_y and max_y.
     // Since offset goes from 0 to max_offset:
@@ -122,6 +120,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
 
     log::trace!("Span: {:?}", start_span..end_span);
 
+    // let mut x_start_f64 = input.base_step_size;
     let mut x_start_f64 = ((min_y - start_span as f64) * ln_base).exp();
 
     for span in start_span..end_span {
@@ -134,7 +133,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
             let ln_x = (start_x_f64 + (idx_m1 + 1) as f64).ln();
             let ln_1sx = (start_x_f64 + idx_m1 as f64).ln();
 
-            if ln_x > ln_max_x_f64.min(ln_max_x) {
+            if ln_x > ln_max_x_f64.min(-input.base_step_size.ln()) {
                 break;
             }
 
@@ -150,7 +149,7 @@ pub fn log10_grid_spacer(input: GridInput) -> Vec<GridMark> {
 
         // Calculate the number of steps.
         // The subtraction happens in f64 space, safely avoiding integer overflow.
-        let x_count = (ln_max_x_f64.min(ln_max_x).exp() - start_x_f64) as u32;
+        let x_count = (ln_max_x_f64.min(-input.base_step_size.ln()).exp() - start_x_f64) as u32;
 
         log::trace!("count: {x_count:4}, X: {:?}", start_x_f64..);
     }
