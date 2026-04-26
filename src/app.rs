@@ -4,7 +4,7 @@ mod plot;
 use crate::utils::format_humantime;
 use backend::{BackendCommand, BackendEvent, start_backend};
 use chrono::Utc;
-use egui::{Frame, Margin};
+use egui::Frame;
 use plot::ChartState;
 use tokio::sync::mpsc::{self as tmpsc, error::TrySendError};
 

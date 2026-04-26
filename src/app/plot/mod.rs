@@ -111,16 +111,6 @@ impl<'f> PlotContext<'f> {
             axis_names,
         }
     }
-
-    pub fn orders(mut self, orders: &'f OrderFrontier) -> Self {
-        self.orders = orders;
-        self
-    }
-
-    pub fn trajectory(mut self, trajectory: &'f [TradeSegment]) -> Self {
-        self.trajectory = trajectory;
-        self
-    }
 }
 
 impl PlotContext<'_> {
@@ -219,7 +209,9 @@ impl ChartState {
                 AxisHints::new_x().label_spacing(Rangef::new(30.0, 80.0)),
             ])
             .show_grid(true)
-            .legend(egui_plot::Legend::default().hidden_items([]))
+            // TODO: How do we hide the legend for a few elements? This will just mark them as "disabled" but still show them in the legend
+            // .legend(egui_plot::Legend::default().hidden_items(["X = 0".into()]))
+            .legend(egui_plot::Legend::default())
             .auto_bounds(false)
             .allow_double_click_reset(false)
             .x_grid_spacer(move |input| {
@@ -299,10 +291,8 @@ impl ChartState {
         ui: &mut egui_plot::PlotUi<'_>,
         ctx: PlotContext<'_>,
     ) -> PlotPanelResponse {
-        // TODO: In log coordinate the aspect ratio should be always 1
         // TODO: Draw the budget line passing through anchor, highlighted point
 
-        // TODO: How do we hide the legend for these?
         // Make the real origin axes obvious.
         ui.hline(
             HLine::new("Y = 0", 0.0)
@@ -348,7 +338,6 @@ impl ChartState {
                 .allow_hover(false)
                 .style(egui_plot::LineStyle::Solid);
 
-            // TODO: This causes weird rescaling for the plot when the time unit is adjusted, how do we tell egui to not zoom out for the trajectory lines?
             if alpha > 0 {
                 ui.line(segment);
             }
@@ -360,7 +349,7 @@ impl ChartState {
         let mut buy_point = *ctx.anchor;
         let mut buy_nodes = vec![buy_point];
         for order in &ctx.orders.bids {
-            // TODO: Considering the freshness of orders does not matter actually, we may want to visually set their intensity based on distance from market best bid/ask. An estimation of when it may go through
+            // TODO: We may want to set their intensity based on distance from market best bid/ask. As an estimation of when it may go through.
             let color = egui::Color32::from_rgba_unmultiplied(46, 204, 133, 240);
 
             let next_point = [buy_point[0] + order.delta[0], buy_point[1] + order.delta[1]];
@@ -388,7 +377,7 @@ impl ChartState {
 
         if buy_nodes.len() > 1 {
             ui.points(
-                Points::new("Bid Order Nodes", buy_nodes)
+                Points::new("Bid Orders", buy_nodes)
                     .radius(3.2)
                     .color(egui::Color32::from_rgba_unmultiplied(92, 230, 164, 170)),
             );
@@ -428,7 +417,7 @@ impl ChartState {
 
         if sell_nodes.len() > 1 {
             ui.points(
-                Points::new("Ask Order Nodes", sell_nodes)
+                Points::new("Ask Orders", sell_nodes)
                     .radius(3.2)
                     .color(egui::Color32::from_rgba_unmultiplied(255, 130, 130, 180)),
             );
