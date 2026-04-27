@@ -226,7 +226,10 @@ impl ChartState {
             .show_grid(true)
             // TODO: How do we hide the legend for a few elements? This will just mark them as "disabled" but still show them in the legend
             // .legend(egui_plot::Legend::default().hidden_items(["X = 0".into()]))
-            .legend(egui_plot::Legend::default())
+            .legend(
+                egui_plot::Legend::default()
+                    .color_conflict_handling(egui_plot::ColorConflictHandling::PickFirst),
+            )
             .auto_bounds(false)
             .allow_double_click_reset(false)
             .x_grid_spacer(grid_marks(positive_only_grid, log_grid_spacing))
