@@ -1,4 +1,3 @@
-use core::range::RangeInclusive;
 use std::f64::consts::LN_10;
 
 use chrono::{DateTime, Utc};
@@ -8,14 +7,11 @@ use egui_plot::{
     PlotResponse, Points, VLine,
 };
 
-use crate::{
-    app::backend::models::Trade,
-    utils::{format_human_num, log_ln_grid_spacer},
-};
+use crate::utils::{format_human_num, log_ln_grid_spacer};
 
 use super::{
     AppMode,
-    backend::models::{Order, TradeType},
+    backend::models::{Order, Trade, TradeType},
 };
 
 pub type Allocation = [f64; 2];
