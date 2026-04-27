@@ -1,7 +1,9 @@
+mod price_allocation;
+
 use std::f64::consts::LN_10;
 
 use chrono::{DateTime, Utc};
-use egui::Rangef;
+use egui::{CentralPanel, Panel, Rangef};
 use egui_plot::{
     AxisHints, GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints,
     PlotResponse, Points, VLine,
@@ -114,7 +116,7 @@ impl<'f> PlotContext<'f> {
 
 impl PlotContext<'_> {
     // TODO: In logarithmic coordinate, the min order coordinates + some padding should be the low x and low y bounds
-    fn order_frontier_bounds(&self) -> PlotBounds {
+    fn order_frontier_bounds(&self, log_grid_spacing: bool) -> PlotBounds {
         let mut bounds = PlotBounds::NOTHING;
 
         bounds.extend_with(&PlotPoint::from(*self.anchor));
@@ -132,6 +134,29 @@ impl PlotContext<'_> {
                 sell_point[1] + order.delta[1],
             ];
             bounds.extend_with(&PlotPoint::from(sell_point));
+        }
+
+        let mut min = bounds.min();
+        let mut max = bounds.max();
+
+        if log_grid_spacing {
+            min.to_logspace();
+            max.to_logspace();
+            bounds = PlotBounds::from_min_max(min, max);
+            log::trace!("Updated Min: {min:?}, Max: {max:?}");
+
+            bounds.expand_x(bounds.width() * 0.06);
+            bounds.expand_y(bounds.height() * 0.06);
+        } else {
+            if self.orders.bids.is_empty() && self.orders.asks.is_empty() {
+                let [x, y] = self.anchor;
+                bounds.extend_with(&PlotPoint::new(x * 2.0, y * 2.0));
+            } else {
+                bounds.expand_x(bounds.width() * 0.06);
+                bounds.expand_y(bounds.height() * 0.06);
+            }
+
+            bounds.extend_with(&PlotPoint::new(0.0, 0.0));
         }
 
         bounds
@@ -210,15 +235,31 @@ impl ChartState {
         ui: &mut egui::Ui,
         ctx: PlotContext<'_>,
     ) -> PlotResponse<PlotPanelResponse> {
+        Panel::right("price_allocation").show_inside(ui, |ui| {
+            Plot::new("price allocation plot")
+                .custom_y_axes(vec![AxisHints::new_y().min_thickness(48.0)])
+                .default_x_bounds(0.0, 1.0000001)
+                .allow_zoom([false, true])
+                .allow_scroll([false, true])
+                .allow_drag([false, true])
+                .allow_axis_zoom_drag([false, true])
+                .y_grid_spacer(grid_marks(true, true))
+                .y_axis_formatter(|m, _| axis_formatter(true, m))
+                .show(ui, |ui| {})
+        });
+
         let positive_only_grid = self.positive_only_grid;
         let log_grid_spacing = self.log_grid_spacing;
 
+        log::trace!("ctx.axis_names: {:?}", ctx.axis_names);
+
         let mut plot = Plot::new("skyline_plot")
-            .x_axis_label(ctx.axis_names.0)
-            .y_axis_label(ctx.axis_names.1)
             .custom_x_axes(vec![
                 AxisHints::new_x().label_spacing(Rangef::new(30.0, 80.0)),
             ])
+            .custom_y_axes(vec![AxisHints::new_y().min_thickness(64.0)])
+            .x_axis_label(ctx.axis_names.0)
+            .y_axis_label(ctx.axis_names.1)
             .show_grid(true)
             // TODO: How do we hide the legend for a few elements? This will just mark them as "disabled" but still show them in the legend
             // .legend(egui_plot::Legend::default().hidden_items(["X = 0".into()]))
@@ -237,36 +278,20 @@ impl ChartState {
             plot = plot.data_aspect(1.0);
         }
 
-        plot.show(ui, |ui| {
-            if ui.response().double_clicked() || self.bounds_need_update {
-                let mut bounds = ctx.order_frontier_bounds();
-                let mut min = bounds.min();
-                let mut max = bounds.max();
-                log::trace!("Min: {min:?}, Max: {max:?}");
-                if self.log_grid_spacing {
-                    min.to_logspace();
-                    max.to_logspace();
-                    bounds = PlotBounds::from_min_max(min, max);
-                    log::trace!("Updated Min: {min:?}, Max: {max:?}");
+        CentralPanel::default()
+            .show_inside(ui, |ui| {
+                plot.show(ui, |ui| {
+                    if ui.response().double_clicked() || self.bounds_need_update {
+                        let bounds = ctx.order_frontier_bounds(self.log_grid_spacing);
 
-                    bounds.expand_x(bounds.width() * 0.06);
-                    bounds.expand_y(bounds.height() * 0.06);
-                } else {
-                    bounds.expand_x(bounds.width() * 0.06);
-                    bounds.expand_y(bounds.height() * 0.06);
-
-                    if !ctx.orders.bids.is_empty() || !ctx.orders.asks.is_empty() {
-                        bounds.extend_with(&PlotPoint::new(0.0, 0.0));
+                        ui.set_plot_bounds(bounds);
+                        self.bounds_need_update = false;
                     }
-                }
 
-                self.bounds_need_update = false;
-
-                ui.set_plot_bounds(bounds);
-            }
-
-            self.render_plot_contents(ui, ctx)
-        })
+                    self.render_plot_contents(ui, ctx)
+                })
+            })
+            .inner
     }
 
     fn render_plot_contents(

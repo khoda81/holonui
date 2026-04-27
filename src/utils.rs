@@ -132,7 +132,6 @@ pub fn log_ln_grid_spacer(input: GridInput, ln_base: f64) -> Vec<GridMark> {
     // TODO: Compare using an epsilon instead as we are dealing with floats
     // marks.dedup_by(|a, b| (a.value / b.value).log10().abs() < 1e-10);
     marks.dedup_by_key(|m| m.value);
-    log::debug!("Deduped: {}", marks.len());
 
     marks
 }
