@@ -213,6 +213,7 @@ impl PlotContext<'_> {
             let points = PlotPoints::from_parametric_callback(
                 move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
                 highest_log_price..=bid.log_price,
+                // TODO: This should be based on the length in pixels
                 128,
             );
 
@@ -227,10 +228,10 @@ impl PlotContext<'_> {
                 continue;
             }
 
-            ui.line(Line::new("Bid Curve", points).color(BID_POINTS_COLOR));
+            ui.line(Line::new("Bid Orders", points).color(BID_POINTS_COLOR));
             ui.line(
                 Line::new(
-                    "Bid Fill",
+                    "Bid Orders",
                     PlotPoints::new(vec![
                         [f_before_unfill, bid.log_price],
                         [f_after_unfill, bid.log_price],
@@ -282,10 +283,10 @@ impl PlotContext<'_> {
                 continue;
             }
 
-            ui.line(Line::new("Ask Curve", points).color(ASK_POINTS_COLOR));
+            ui.line(Line::new("Ask Orders", points).color(ASK_POINTS_COLOR));
             ui.line(
                 Line::new(
-                    "Ask Fill",
+                    "Ask Orders",
                     PlotPoints::new(vec![
                         [f_before_unfill, ask.log_price],
                         [f_after_unfill, ask.log_price],
