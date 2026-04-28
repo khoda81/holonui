@@ -117,6 +117,10 @@ impl HolonApp {
                 AppMode::GhostLine => AppMode::Default,
             };
         }
+
+        if ui.input(|i| i.key_pressed(egui::Key::F5)) {
+            _ = self.backend_commands.send(BackendCommand::FetchAll);
+        }
     }
 
     fn render_main_plot(&mut self, ui: &mut egui::Ui) {

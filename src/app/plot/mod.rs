@@ -374,6 +374,8 @@ impl ChartState {
                 .allow_drag([false, true])
                 .allow_axis_zoom_drag([false, true])
                 .auto_bounds(false)
+                // TODO: The price axis scale should be set to a default value per pixel and centered such that current allocation line is centered in frame
+                .allow_double_click_reset(false)
                 // .x_grid_spacer(egui_plot::uniform_grid_spacer([10.0, 5.0, 2.0]))
                 .y_grid_spacer(grid_marks(true, true))
                 .y_axis_formatter(|m, _| axis_formatter(true, m))
