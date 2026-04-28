@@ -180,10 +180,12 @@ impl PlotContext<'_> {
 
     /// Renders the full price-allocation step curve, including orders.
     fn render_exposure_curve(&self, ui: &mut PlotUi) {
-        let [x, y] = *self.anchor;
-        let anchor_balance = (x, y);
+        let anchor_balance = *self.anchor;
 
-        // 1. Prepare and sort the orders
+        // TODO: This causes a 1-frame lag for updating lines
+        let y_range = ui.plot_bounds().range_y();
+
+        // 1. Prepare bids: sort from LOWEST price to HIGHEST
         let mut bids: Vec<PricedOrder> = self
             .orders
             .bids
@@ -197,9 +199,50 @@ impl PlotContext<'_> {
             })
             .collect();
 
-        // Bids are sorted high-to-low price
-        bids.sort_by(|a, b| b.log_price.partial_cmp(&a.log_price).unwrap());
+        bids.sort_by(|a, b| a.log_price.total_cmp(&b.log_price));
 
+        // 2. Calculate the total balance as if all bids were filled
+        let mut cumulative_balance = bids.iter().fold(anchor_balance, |acc, b| {
+            [acc[0] + b.delta[0], acc[1] + b.delta[1]]
+        });
+
+        // 3. Draw from the bottom of the plot upwards, "un-filling" orders
+        let mut highest_log_price = *y_range.start();
+        for bid in bids.iter() {
+            // Draw the sigmoid curve segment using the current (more extreme) balance
+            let points = PlotPoints::from_parametric_callback(
+                move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
+                highest_log_price..=bid.log_price,
+                128,
+            );
+
+            // Draw the horizontal "fill" line for this order
+            let f_before_unfill = log_price_to_allocation(bid.log_price, cumulative_balance);
+            cumulative_balance[0] -= bid.delta[0];
+            cumulative_balance[1] -= bid.delta[1];
+
+            let f_after_unfill = log_price_to_allocation(bid.log_price, cumulative_balance);
+
+            if bid.log_price <= highest_log_price {
+                continue;
+            }
+
+            ui.line(Line::new("Bid Curve", points).color(BID_POINTS_COLOR));
+            ui.line(
+                Line::new(
+                    "Bid Fill",
+                    PlotPoints::new(vec![
+                        [f_before_unfill, bid.log_price],
+                        [f_after_unfill, bid.log_price],
+                    ]),
+                )
+                .color(BID_LINE_COLOR),
+            );
+
+            highest_log_price = bid.log_price;
+        }
+
+        // 1. Prepare asks: sort from HIGHEST price to LOWEST
         let mut asks: Vec<PricedOrder> = self
             .orders
             .asks
@@ -212,95 +255,57 @@ impl PlotContext<'_> {
                 }
             })
             .collect();
+        asks.sort_by(|a, b| b.log_price.total_cmp(&a.log_price));
 
-        // Asks are sorted low-to-high price
-        asks.sort_by(|a, b| a.log_price.partial_cmp(&b.log_price).unwrap());
+        // 2. Calculate total balance if all asks were filled
+        let mut cumulative_balance = asks.iter().fold(anchor_balance, |acc, a| {
+            [acc[0] + a.delta[0], acc[1] + a.delta[1]]
+        });
 
-        let y_range = ui.plot_bounds().range_y();
-        let highest_bid_log_price = bids.first().map_or(y_range.start(), |o| &o.log_price);
-        let lowest_ask_log_price = asks.first().map_or(y_range.end(), |o| &o.log_price);
-
-        // 2. Draw the central "anchor" curve between the best bid and ask
-        let points = PlotPoints::from_parametric_callback(
-            move |log_p| (log_price_to_allocation(log_p, anchor_balance), log_p),
-            highest_bid_log_price..=lowest_ask_log_price,
-            512,
-        );
-        ui.line(Line::new("Anchor", points).color(ANCHOR_COLOR));
-
-        // 3. Draw the bids side (moving down in price)
-        let mut cumulative_balance = anchor_balance;
-        let mut last_log_price = highest_bid_log_price;
-
-        for (i, bid) in bids.iter().enumerate() {
-            // Draw the horizontal line for this order
-            let f_start = log_price_to_allocation(bid.log_price, cumulative_balance);
-            let balance_after = (
-                cumulative_balance.0 + bid.delta[0],
-                cumulative_balance.1 + bid.delta[1],
-            );
-            let f_end = log_price_to_allocation(bid.log_price, balance_after);
-            ui.line(
-                Line::new(
-                    "Bid Fill",
-                    PlotPoints::new(vec![[f_start, bid.log_price], [f_end, bid.log_price]]),
-                )
-                .width(5.0)
-                .color(BID_LINE_COLOR),
-            );
-
-            // Update balance for the next segment
-            cumulative_balance = balance_after;
-
-            // Draw the sigmoid segment connecting to the *next* bid
-            let next_log_price = bids.get(i + 1).map_or(y_range.start(), |o| &o.log_price);
+        // 3. Draw from the top down, "un-filling" orders
+        let mut lowest_log_price = *y_range.end();
+        for ask in asks.iter() {
+            // Draw the sigmoid curve segment above this order
             let points = PlotPoints::from_parametric_callback(
                 move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
-                next_log_price..=last_log_price,
-                256,
+                ask.log_price..=lowest_log_price,
+                128,
             );
-            ui.line(Line::new("Bid Curve", points).color(BID_POINTS_COLOR));
 
-            last_log_price = next_log_price;
-        }
+            // Draw horizontal fill line
+            let f_before_unfill = log_price_to_allocation(ask.log_price, cumulative_balance);
+            cumulative_balance[0] -= ask.delta[0];
+            cumulative_balance[1] -= ask.delta[1];
+            let f_after_unfill = log_price_to_allocation(ask.log_price, cumulative_balance);
 
-        // 4. Draw the asks side (moving up in price)
-        cumulative_balance = anchor_balance;
-        last_log_price = lowest_ask_log_price;
+            if lowest_log_price <= ask.log_price {
+                continue;
+            }
 
-        for (i, ask) in asks.iter().enumerate() {
-            log::trace!("Ask: {:?}", ask);
-            // Draw the horizontal line
-            let f_start = log_price_to_allocation(ask.log_price, cumulative_balance);
-            let balance_after = (
-                cumulative_balance.0 + ask.delta[0],
-                cumulative_balance.1 + ask.delta[1],
-            );
-            let f_end = log_price_to_allocation(ask.log_price, balance_after);
+            ui.line(Line::new("Ask Curve", points).color(ASK_POINTS_COLOR));
             ui.line(
                 Line::new(
                     "Ask Fill",
-                    PlotPoints::new(vec![[f_start, ask.log_price], [f_end, ask.log_price]]),
+                    PlotPoints::new(vec![
+                        [f_before_unfill, ask.log_price],
+                        [f_after_unfill, ask.log_price],
+                    ]),
                 )
-                .width(5.0)
                 .color(ASK_LINE_COLOR),
             );
 
-            // Update balance
-            cumulative_balance = balance_after;
-
-            // Draw the sigmoid segment connecting to the *next* ask
-            let next_log_price = asks.get(i + 1).map_or(y_range.end(), |o| &o.log_price);
-            log::trace!("Drawing from: {:?}", last_log_price..=next_log_price);
-            let points = PlotPoints::from_parametric_callback(
-                move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
-                last_log_price..=next_log_price,
-                256,
-            );
-            ui.line(Line::new("Ask Curve", points).color(ASK_POINTS_COLOR));
-
-            last_log_price = next_log_price;
+            lowest_log_price = ask.log_price;
         }
+
+        // `last_log_price` is now the price of the lowest ask, the top of the anchor curve range.
+        // --- ANCHOR (Center) ---
+        // The range for the anchor curve is now perfectly defined by the loops above.
+        let points = PlotPoints::from_parametric_callback(
+            move |log_p| (log_price_to_allocation(log_p, anchor_balance), log_p),
+            highest_log_price..=lowest_log_price,
+            256,
+        );
+        ui.line(Line::new("Anchor", points).color(ANCHOR_COLOR));
     }
 }
 
