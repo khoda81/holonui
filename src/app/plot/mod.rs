@@ -55,6 +55,12 @@ pub struct OrderSegment {
     created_at: DateTime<Utc>,
 }
 
+impl OrderSegment {
+    pub fn price(&self) -> f64 {
+        -self.delta[1] / self.delta[0]
+    }
+}
+
 impl From<Order> for OrderSegment {
     fn from(value: Order) -> Self {
         // TODO: Apply a fee to the price, these prices are not the actual executed price
@@ -110,6 +116,8 @@ fn draw_exposure_wing(
         (ASK_LINE_COLOR, ASK_POINTS_COLOR)
     };
 
+    let name = if is_bids { "Bid Orders" } else { "Ask Orders" };
+
     // The price of the order closest to the anchor.
     // We will update this as we draw the final segment to the plot edge.
     let Some(first_order) = orders.first() else {
@@ -117,35 +125,29 @@ fn draw_exposure_wing(
         return plot_edge_log_price;
     };
 
-    let last_log_price = (-first_order.delta[1] / first_order.delta[0]).log10();
-
     for i in 0..orders.len() {
         let order = &orders[i];
-        let log_price = (-order.delta[1] / order.delta[0]).log10();
+        let log_price = order.price().log10();
 
         // 1. Draw the horizontal "fill" line
         let f_before_fill = log_price_to_allocation(log_price, cumulative_balance);
-        let balance_after_fill = [
-            cumulative_balance[0] + order.delta[0],
-            cumulative_balance[1] + order.delta[1],
-        ];
-        let f_after_fill = log_price_to_allocation(log_price, balance_after_fill);
+        cumulative_balance[0] += order.delta[0];
+        cumulative_balance[1] += order.delta[1];
+
+        let f_after_fill = log_price_to_allocation(log_price, cumulative_balance);
         ui.line(
             Line::new(
-                "Fill",
+                name,
                 PlotPoints::new(vec![[f_before_fill, log_price], [f_after_fill, log_price]]),
             )
             .color(line_color),
         );
 
-        // 2. Update the balance for the next segment
-        cumulative_balance = balance_after_fill;
-
         // 3. Determine the range for the next curve segment
-        let next_log_price = if let Some(next_order) = orders.get(i + 1) {
-            (-next_order.delta[1] / next_order.delta[0]).log10()
-        } else {
-            plot_edge_log_price // This is the last order, so draw to the plot edge
+        let next_log_price = match orders.get(i + 1) {
+            Some(next_order) => next_order.price().log10(),
+            // This is the last order, so draw to the plot edge
+            None => plot_edge_log_price,
         };
 
         // 4. Draw the curve segment
@@ -157,13 +159,14 @@ fn draw_exposure_wing(
         let points = PlotPoints::from_parametric_callback(
             move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
             range,
+            // TODO: This should be based on size of line in pixel space
             128,
         );
 
-        ui.line(Line::new("Curve", points).color(curve_color));
+        ui.line(Line::new(name, points).color(curve_color));
     }
 
-    last_log_price
+    (-first_order.delta[1] / first_order.delta[0]).log10()
 }
 
 #[derive(Clone, Copy, Debug)]
