@@ -248,12 +248,13 @@ impl ChartState {
                 .allow_scroll([false, true])
                 .allow_drag([false, true])
                 .allow_axis_zoom_drag([false, true])
+                // .x_grid_spacer(egui_plot::uniform_grid_spacer([10.0, 5.0, 2.0]))
                 .y_grid_spacer(grid_marks(true, true))
                 .y_axis_formatter(|m, _| axis_formatter(true, m))
                 .show(ui, |ui| {
                     let [x, y] = *ctx.anchor;
                     let points = PlotPoints::from_explicit_callback(
-                        move |f| generate_price_allocation_line(f, (x, y)),
+                        move |f| generate_price_allocation_line(f, (x, y)) / -LN_10,
                         0.0..1.0,
                         1024,
                     );
