@@ -186,10 +186,11 @@ impl PlotContext<'_> {
         let y_range = ui.plot_bounds().range_y();
 
         // 1. Prepare bids: sort from LOWEST price to HIGHEST
-        let mut bids: Vec<PricedOrder> = self
+        let bids: Vec<PricedOrder> = self
             .orders
             .bids
             .iter()
+            .rev()
             .map(|order| {
                 let price = -order.delta[1] / order.delta[0];
                 PricedOrder {
@@ -198,8 +199,6 @@ impl PlotContext<'_> {
                 }
             })
             .collect();
-
-        bids.sort_by(|a, b| a.log_price.total_cmp(&b.log_price));
 
         // 2. Calculate the total balance as if all bids were filled
         let mut cumulative_balance = bids.iter().fold(anchor_balance, |acc, b| {
@@ -244,10 +243,11 @@ impl PlotContext<'_> {
         }
 
         // 1. Prepare asks: sort from HIGHEST price to LOWEST
-        let mut asks: Vec<PricedOrder> = self
+        let asks: Vec<PricedOrder> = self
             .orders
             .asks
             .iter()
+            .rev()
             .map(|order| {
                 let price = -order.delta[1] / order.delta[0];
                 PricedOrder {
@@ -256,7 +256,6 @@ impl PlotContext<'_> {
                 }
             })
             .collect();
-        asks.sort_by(|a, b| b.log_price.total_cmp(&a.log_price));
 
         // 2. Calculate total balance if all asks were filled
         let mut cumulative_balance = asks.iter().fold(anchor_balance, |acc, a| {
@@ -296,6 +295,10 @@ impl PlotContext<'_> {
             );
 
             lowest_log_price = ask.log_price;
+        }
+
+        if lowest_log_price <= highest_log_price {
+            return;
         }
 
         // `last_log_price` is now the price of the lowest ask, the top of the anchor curve range.
@@ -384,7 +387,10 @@ impl ChartState {
     ) -> PlotResponse<PlotPanelResponse> {
         Panel::right("price_allocation").show_inside(ui, |ui| {
             Plot::new("price allocation plot")
-                .legend(Legend::default())
+                .legend(
+                    Legend::default()
+                        .color_conflict_handling(egui_plot::ColorConflictHandling::PickFirst),
+                )
                 .custom_y_axes(vec![AxisHints::new_y().min_thickness(48.0)])
                 .default_x_bounds(0.0, 1.0000001)
                 .allow_zoom([false, true])
