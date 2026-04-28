@@ -129,6 +129,24 @@ fn draw_exposure_wing(
         let order = &orders[i];
         let log_price = order.price().log10();
 
+        // 3. Determine the range for the next curve segment
+        let next_log_price = match orders.get(i + 1) {
+            Some(next_order) => next_order.price().log10(),
+            // This is the last order, so draw to the plot edge
+            None => plot_edge_log_price,
+        };
+
+        // 4. Draw the curve segment
+        let range = if is_bids {
+            next_log_price..=log_price
+        } else {
+            log_price..=next_log_price
+        };
+
+        if range.is_empty() {
+            break;
+        }
+
         // 1. Draw the horizontal "fill" line
         let f_before_fill = log_price_to_allocation(log_price, cumulative_balance);
         cumulative_balance[0] += order.delta[0];
@@ -143,19 +161,6 @@ fn draw_exposure_wing(
             .color(line_color),
         );
 
-        // 3. Determine the range for the next curve segment
-        let next_log_price = match orders.get(i + 1) {
-            Some(next_order) => next_order.price().log10(),
-            // This is the last order, so draw to the plot edge
-            None => plot_edge_log_price,
-        };
-
-        // 4. Draw the curve segment
-        let range = if is_bids {
-            next_log_price..=log_price
-        } else {
-            log_price..=next_log_price
-        };
         let points = PlotPoints::from_parametric_callback(
             move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
             range,
@@ -166,7 +171,7 @@ fn draw_exposure_wing(
         ui.line(Line::new(name, points).color(curve_color));
     }
 
-    (-first_order.delta[1] / first_order.delta[0]).log10()
+    first_order.price().log10()
 }
 
 #[derive(Clone, Copy, Debug)]
