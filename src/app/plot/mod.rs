@@ -212,6 +212,7 @@ impl PlotContext<'_> {
                 }
             })
             .collect();
+
         // Asks are sorted low-to-high price
         asks.sort_by(|a, b| a.log_price.partial_cmp(&b.log_price).unwrap());
 
@@ -244,7 +245,8 @@ impl PlotContext<'_> {
                     "Bid Fill",
                     PlotPoints::new(vec![[f_start, bid.log_price], [f_end, bid.log_price]]),
                 )
-                .color(BID_POINTS_COLOR),
+                .width(5.0)
+                .color(BID_LINE_COLOR),
             );
 
             // Update balance for the next segment
@@ -257,9 +259,9 @@ impl PlotContext<'_> {
                 next_log_price..=last_log_price,
                 256,
             );
-            ui.line(Line::new("Bid Curve", points).color(BID_LINE_COLOR));
+            ui.line(Line::new("Bid Curve", points).color(BID_POINTS_COLOR));
 
-            last_log_price = &bid.log_price;
+            last_log_price = next_log_price;
         }
 
         // 4. Draw the asks side (moving up in price)
@@ -267,6 +269,7 @@ impl PlotContext<'_> {
         last_log_price = lowest_ask_log_price;
 
         for (i, ask) in asks.iter().enumerate() {
+            log::trace!("Ask: {:?}", ask);
             // Draw the horizontal line
             let f_start = log_price_to_allocation(ask.log_price, cumulative_balance);
             let balance_after = (
@@ -279,7 +282,8 @@ impl PlotContext<'_> {
                     "Ask Fill",
                     PlotPoints::new(vec![[f_start, ask.log_price], [f_end, ask.log_price]]),
                 )
-                .color(ASK_POINTS_COLOR),
+                .width(5.0)
+                .color(ASK_LINE_COLOR),
             );
 
             // Update balance
@@ -287,14 +291,15 @@ impl PlotContext<'_> {
 
             // Draw the sigmoid segment connecting to the *next* ask
             let next_log_price = asks.get(i + 1).map_or(y_range.end(), |o| &o.log_price);
+            log::trace!("Drawing from: {:?}", last_log_price..=next_log_price);
             let points = PlotPoints::from_parametric_callback(
                 move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
                 last_log_price..=next_log_price,
                 256,
             );
-            ui.line(Line::new("Ask Curve", points).color(ASK_LINE_COLOR));
+            ui.line(Line::new("Ask Curve", points).color(ASK_POINTS_COLOR));
 
-            last_log_price = &ask.log_price;
+            last_log_price = next_log_price;
         }
     }
 }
