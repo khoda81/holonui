@@ -3,10 +3,10 @@ mod price_allocation;
 use std::f64::consts::LN_10;
 
 use chrono::{DateTime, Utc};
-use egui::{CentralPanel, Panel, Rangef};
+use egui::{CentralPanel, Color32, Panel, Rangef};
 use egui_plot::{
     AxisHints, GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints,
-    PlotResponse, Points, VLine,
+    PlotResponse, PlotUi, Points, VLine,
 };
 
 use super::{
@@ -14,7 +14,16 @@ use super::{
     backend::models::{Order, Trade, TradeType},
 };
 use crate::utils::{format_human_num, log_ln_grid_spacer};
-use price_allocation::{allocation_to_price, price_to_allocation};
+use price_allocation::price_to_allocation;
+
+// Define colors as constants for clarity and easy modification.
+const AXIS_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(250, 238, 214, 230);
+const ANCHOR_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(255, 215, 0, 255);
+const BID_LINE_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(46, 204, 133, 240);
+const BID_POINTS_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(92, 230, 164, 170);
+const ASK_LINE_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(235, 87, 87, 240);
+const ASK_POINTS_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(255, 130, 130, 180);
+const TRAJECTORY_BASE_COLOR: [u8; 3] = [108, 156, 217];
 
 pub type Allocation = [f64; 2];
 
@@ -217,8 +226,6 @@ pub struct PlotPanelResponse {
 }
 
 impl ChartState {
-    const ANCHOR_COLOR: egui::Color32 = egui::Color32::from_rgb(250, 244, 230);
-
     pub fn new() -> Self {
         Self {
             time_unit: chrono::Duration::days(2),
@@ -261,7 +268,7 @@ impl ChartState {
                     let line = Line::new("Anchor", points)
                         // .width(2.6)
                         .style(egui_plot::LineStyle::Solid)
-                        .color(Self::ANCHOR_COLOR);
+                        .color(ANCHOR_COLOR);
 
                     ui.line(line);
                 })
@@ -311,156 +318,144 @@ impl ChartState {
             .inner
     }
 
-    fn render_plot_contents(
-        &self,
-        ui: &mut egui_plot::PlotUi<'_>,
-        ctx: PlotContext<'_>,
-    ) -> PlotPanelResponse {
-        // TODO: Draw the budget line passing through anchor, highlighted point
+    /// The main rendering function, now acting as a high-level coordinator.
+    fn render_plot_contents(&self, ui: &mut PlotUi, ctx: PlotContext<'_>) -> PlotPanelResponse {
+        self.draw_origin_axes(ui);
+        self.draw_trajectory(ui, &ctx);
 
-        if !self.log_grid_spacing {
-            // Make the real origin axes obvious.
-            ui.hline(
-                HLine::new("Y = 0", 0.0)
-                    .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
-                    .width(2.2),
-            );
-            ui.vline(
-                VLine::new("X = 0", 0.0)
-                    .color(egui::Color32::from_rgba_unmultiplied(250, 238, 214, 230))
-                    .width(2.2),
-            );
+        self.draw_order_chain(
+            ui,
+            *ctx.anchor,
+            &ctx.orders.bids,
+            "Bid Orders",
+            BID_LINE_COLOR,
+            BID_POINTS_COLOR,
+        );
+
+        self.draw_order_chain(
+            ui,
+            *ctx.anchor,
+            &ctx.orders.asks,
+            "Ask Orders",
+            ASK_LINE_COLOR,
+            ASK_POINTS_COLOR,
+        );
+
+        self.draw_anchor_point(ui, *ctx.anchor);
+
+        self.handle_user_interaction(ui, ctx)
+    }
+
+    /// Helper to transform points to logspace if required.
+    fn transform_points(&self, points: &mut Vec<[f64; 2]>) {
+        if self.log_grid_spacing {
+            points.to_logspace();
         }
+    }
 
+    /// Draws the X and Y axes if not in log scale.
+    fn draw_origin_axes(&self, ui: &mut PlotUi) {
+        if !self.log_grid_spacing {
+            ui.hline(HLine::new("Y = 0", 0.0).color(AXIS_COLOR).width(2.2));
+            ui.vline(VLine::new("X = 0", 0.0).color(AXIS_COLOR).width(2.2));
+        }
+    }
+
+    /// Draws the historical trade trajectory with age-based fading.
+    fn draw_trajectory(&self, ui: &mut PlotUi, ctx: &PlotContext<'_>) {
         let mut current_point = *ctx.anchor;
-        // Draw trajectory as age-faded segments in one color family.
-        for TradeSegment { delta, timestamp } in ctx.trajectory.iter() {
-            // TODO: The freshness calculation can probably be refactored out
-            let elapsed = ctx.now - *timestamp;
-            let mut elapsed_s = elapsed.as_seconds_f64();
-
-            // Ensure dt is never negative
-            if elapsed_s < 0.0 {
-                log::warn!("Unexpected negative elapsed time for a trade");
-                elapsed_s = 0.0;
-            }
-
-            // Calculate ratio and the exponential decay weight
+        for segment in ctx.trajectory.iter() {
+            let elapsed_s = (ctx.now - segment.timestamp).as_seconds_f64().max(0.0);
             let delta_t = elapsed_s / self.time_unit.as_seconds_f64();
             let freshness = (-delta_t as f32).exp(); // 1.0 = recent, 0.0 = old
             let alpha = (215.0 * freshness) as u8;
-            let color = egui::Color32::from_rgba_unmultiplied(108, 156, 217, alpha);
 
-            let next_point = [current_point[0] + delta[0], current_point[1] + delta[1]];
-            // TODO: Drawing as separate lines causes weird artifact at the joints where two lines overlap for one pixel
-            // TODO: Can we use additive blending to make the redrawn lines visually better? Additive blending that can cause overblown colors and bloom is even better like a laser/light source
+            if alpha == 0 {
+                // Optimization: if it's fully transparent, don't draw.
+                current_point = [
+                    current_point[0] + segment.delta[0],
+                    current_point[1] + segment.delta[1],
+                ];
+                continue;
+            }
+
+            let color = Color32::from_rgba_unmultiplied(
+                TRAJECTORY_BASE_COLOR[0],
+                TRAJECTORY_BASE_COLOR[1],
+                TRAJECTORY_BASE_COLOR[2],
+                alpha,
+            );
+
+            let next_point = [
+                current_point[0] + segment.delta[0],
+                current_point[1] + segment.delta[1],
+            ];
             let mut points = vec![current_point, next_point];
-            if self.log_grid_spacing {
-                points.to_logspace()
-            }
+            self.transform_points(&mut points);
 
-            let segment = Line::new("Trajectory", PlotPoints::new(points))
+            let line = Line::new("Trajectory", PlotPoints::new(points))
                 .color(color)
-                .width(2.0)
-                .allow_hover(false)
-                .style(egui_plot::LineStyle::Solid);
+                .width(2.0);
 
-            if alpha > 0 {
-                ui.line(segment);
-            }
+            ui.line(line);
 
             current_point = next_point;
         }
+    }
 
-        // Buy arm: cumulative chain from anchor.
-        let mut buy_point = *ctx.anchor;
-        let mut buy_nodes = vec![buy_point];
-        for order in &ctx.orders.bids {
-            // TODO: We may want to set their intensity based on distance from market best bid/ask. As an estimation of when it may go through.
-            let color = egui::Color32::from_rgba_unmultiplied(46, 204, 133, 240);
-
-            let next_point = [buy_point[0] + order.delta[0], buy_point[1] + order.delta[1]];
-
-            let mut points = vec![buy_point, next_point];
-
-            if self.log_grid_spacing {
-                points.to_logspace()
-            }
-
-            ui.line(
-                Line::new("Bid Orders", PlotPoints::new(points))
-                    .color(color)
-                    .width(2.6)
-                    .style(egui_plot::LineStyle::Solid),
-            );
-
-            buy_point = next_point;
-            buy_nodes.push(next_point);
+    /// Draws a chain of orders (either bids or asks) starting from the anchor.
+    fn draw_order_chain(
+        &self,
+        ui: &mut PlotUi,
+        anchor: [f64; 2],
+        orders: &[OrderSegment],
+        name: &'static str,
+        line_color: Color32,
+        points_color: Color32,
+    ) {
+        if orders.is_empty() {
+            return;
         }
 
-        if self.log_grid_spacing {
-            buy_nodes.to_logspace()
-        }
+        let mut current_point = anchor;
+        let mut nodes = vec![anchor];
 
-        if buy_nodes.len() > 1 {
-            ui.points(
-                Points::new("Bid Orders", buy_nodes)
-                    .radius(3.2)
-                    .color(egui::Color32::from_rgba_unmultiplied(92, 230, 164, 170)),
-            );
-        }
-
-        // Sell arm: cumulative chain from anchor.
-        let mut sell_point = *ctx.anchor;
-        let mut sell_nodes = vec![sell_point];
-        for order in &ctx.orders.asks {
-            let color = egui::Color32::from_rgba_unmultiplied(235, 87, 87, 240);
-
+        for order in orders {
             let next_point = [
-                sell_point[0] + order.delta[0],
-                sell_point[1] + order.delta[1],
+                current_point[0] + order.delta[0],
+                current_point[1] + order.delta[1],
             ];
+            let mut line_points = vec![current_point, next_point];
+            self.transform_points(&mut line_points);
 
-            let mut points = vec![sell_point, next_point];
+            let line = Line::new(name, PlotPoints::new(line_points))
+                .color(line_color)
+                .width(2.6);
 
-            if self.log_grid_spacing {
-                points.to_logspace()
-            }
+            ui.line(line);
 
-            ui.line(
-                Line::new("Ask Orders", PlotPoints::new(points))
-                    .color(color)
-                    .width(2.6)
-                    .style(egui_plot::LineStyle::Solid),
-            );
-
-            sell_point = next_point;
-            sell_nodes.push(next_point);
+            current_point = next_point;
+            nodes.push(next_point);
         }
 
-        if self.log_grid_spacing {
-            sell_nodes.to_logspace()
-        }
+        self.transform_points(&mut nodes);
+        let points = Points::new(name, nodes).radius(3.2).color(points_color);
+        ui.points(points);
+    }
 
-        if sell_nodes.len() > 1 {
-            ui.points(
-                Points::new("Ask Orders", sell_nodes)
-                    .radius(3.2)
-                    .color(egui::Color32::from_rgba_unmultiplied(255, 130, 130, 180)),
-            );
-        }
-
-        let mut anchor_node = vec![*ctx.anchor];
-        if self.log_grid_spacing {
-            anchor_node.to_logspace();
-        }
-
+    /// Draws the central anchor point representing the current balance.
+    fn draw_anchor_point(&self, ui: &mut PlotUi, anchor: [f64; 2]) {
+        let mut anchor_node = vec![anchor];
+        self.transform_points(&mut anchor_node);
         ui.points(
             Points::new("Anchor (Current Balance)", anchor_node)
                 .radius(6.5)
-                .color(Self::ANCHOR_COLOR),
+                .color(ANCHOR_COLOR),
         );
+    }
 
+    /// Handles drawing the ghost line and processing clicks for new orders.
+    fn handle_user_interaction(&self, ui: &mut PlotUi, ctx: PlotContext<'_>) -> PlotPanelResponse {
         let mut response = PlotPanelResponse {
             clicked_delta: None,
         };
@@ -469,31 +464,33 @@ impl ChartState {
             return response;
         }
 
+        // Draw ghost line to mouse position
         if let Some(mouse_pos) = ui.pointer_coordinate() {
-            let mut ghost_points = vec![*ctx.anchor];
+            let mut ghost_points = vec![*ctx.anchor, [mouse_pos.x, mouse_pos.y]];
+            self.transform_points(&mut ghost_points);
 
-            if self.log_grid_spacing {
-                ghost_points.to_logspace();
-            }
-
-            ghost_points.push([mouse_pos.x, mouse_pos.y]);
-
-            let ghost_line = Line::new("Ghost Line", PlotPoints::new(ghost_points))
-                .color(egui::Color32::from_rgba_unmultiplied(240, 240, 255, 170))
+            let ghost_line = Line::new("Order", ghost_points)
+                .color(Color32::from_rgba_unmultiplied(240, 240, 255, 170))
                 .width(1.8)
                 .style(egui_plot::LineStyle::Dashed { length: 5.0 });
 
             ui.line(ghost_line);
         }
 
+        // Handle clicks
         if ui.response().clicked()
-            && let Some(PlotPoint { x, y }) = ui.pointer_coordinate()
+            && let Some(point) = ui.pointer_coordinate()
         {
             if self.log_grid_spacing {
-                todo!()
+                // You still need to implement the inverse log transformation here.
+                // For example:
+                // let x = 10.0f64.powf(point.x);
+                // let y = 10.0f64.powf(point.y);
+                // response.clicked_delta = Some([x - ctx.anchor[0], y - ctx.anchor[1]]);
+                todo!("Handle click in log space");
+            } else {
+                response.clicked_delta = Some([point.x - ctx.anchor[0], point.y - ctx.anchor[1]]);
             }
-
-            response.clicked_delta = Some([x - ctx.anchor[0], y - ctx.anchor[1]]);
         }
 
         response
