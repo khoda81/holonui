@@ -9,7 +9,10 @@ use egui_plot::{
     PlotResponse, Points, VLine,
 };
 
-use crate::utils::{format_human_num, log_ln_grid_spacer};
+use crate::{
+    app::plot::price_allocation::generate_price_allocation_line,
+    utils::{format_human_num, log_ln_grid_spacer},
+};
 
 use super::{
     AppMode,
@@ -217,6 +220,8 @@ pub struct PlotPanelResponse {
 }
 
 impl ChartState {
+    const ANCHOR_COLOR: egui::Color32 = egui::Color32::from_rgb(250, 244, 230);
+
     pub fn new() -> Self {
         Self {
             time_unit: chrono::Duration::days(2),
@@ -245,13 +250,25 @@ impl ChartState {
                 .allow_axis_zoom_drag([false, true])
                 .y_grid_spacer(grid_marks(true, true))
                 .y_axis_formatter(|m, _| axis_formatter(true, m))
-                .show(ui, |ui| {})
+                .show(ui, |ui| {
+                    let [x, y] = *ctx.anchor;
+                    let points = PlotPoints::from_explicit_callback(
+                        move |f| generate_price_allocation_line(f, (x, y)),
+                        0.0..1.0,
+                        1024,
+                    );
+
+                    let line = Line::new("Anchor", points)
+                        .width(2.6)
+                        .style(egui_plot::LineStyle::Solid)
+                        .color(Self::ANCHOR_COLOR);
+
+                    ui.line(line);
+                })
         });
 
         let positive_only_grid = self.positive_only_grid;
         let log_grid_spacing = self.log_grid_spacing;
-
-        log::trace!("ctx.axis_names: {:?}", ctx.axis_names);
 
         let mut plot = Plot::new("skyline_plot")
             .custom_x_axes(vec![
@@ -441,7 +458,7 @@ impl ChartState {
         ui.points(
             Points::new("Anchor (Current Balance)", anchor_node)
                 .radius(6.5)
-                .color(egui::Color32::from_rgb(250, 244, 230)),
+                .color(Self::ANCHOR_COLOR),
         );
 
         let mut response = PlotPanelResponse {
