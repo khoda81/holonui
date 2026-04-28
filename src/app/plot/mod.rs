@@ -95,11 +95,75 @@ impl OrderFrontier {
     }
 }
 
-/// A helper struct to hold an order and its calculated price.
-#[derive(Clone, Copy, Debug)]
-struct PricedOrder {
-    delta: [f64; 2],
-    log_price: f64,
+/// Draws one "wing" (either bids or asks) of the exposure curve in a single pass.
+/// Assumes bids are sorted high-to-low price, and asks are low-to-high price.
+fn draw_exposure_wing(
+    ui: &mut PlotUi,
+    orders: &[OrderSegment],
+    mut cumulative_balance: [f64; 2],
+    plot_edge_log_price: f64,
+    is_bids: bool,
+) -> f64 {
+    let (line_color, curve_color) = if is_bids {
+        (BID_LINE_COLOR, BID_POINTS_COLOR)
+    } else {
+        (ASK_LINE_COLOR, ASK_POINTS_COLOR)
+    };
+
+    // The price of the order closest to the anchor.
+    // We will update this as we draw the final segment to the plot edge.
+    let Some(first_order) = orders.first() else {
+        // If no orders, the anchor curve extends to the edge.
+        return plot_edge_log_price;
+    };
+
+    let last_log_price = (-first_order.delta[1] / first_order.delta[0]).log10();
+
+    for i in 0..orders.len() {
+        let order = &orders[i];
+        let log_price = (-order.delta[1] / order.delta[0]).log10();
+
+        // 1. Draw the horizontal "fill" line
+        let f_before_fill = log_price_to_allocation(log_price, cumulative_balance);
+        let balance_after_fill = [
+            cumulative_balance[0] + order.delta[0],
+            cumulative_balance[1] + order.delta[1],
+        ];
+        let f_after_fill = log_price_to_allocation(log_price, balance_after_fill);
+        ui.line(
+            Line::new(
+                "Fill",
+                PlotPoints::new(vec![[f_before_fill, log_price], [f_after_fill, log_price]]),
+            )
+            .color(line_color),
+        );
+
+        // 2. Update the balance for the next segment
+        cumulative_balance = balance_after_fill;
+
+        // 3. Determine the range for the next curve segment
+        let next_log_price = if let Some(next_order) = orders.get(i + 1) {
+            (-next_order.delta[1] / next_order.delta[0]).log10()
+        } else {
+            plot_edge_log_price // This is the last order, so draw to the plot edge
+        };
+
+        // 4. Draw the curve segment
+        let range = if is_bids {
+            next_log_price..=log_price
+        } else {
+            log_price..=next_log_price
+        };
+        let points = PlotPoints::from_parametric_callback(
+            move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
+            range,
+            128,
+        );
+
+        ui.line(Line::new("Curve", points).color(curve_color));
+    }
+
+    last_log_price
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -177,136 +241,40 @@ impl PlotContext<'_> {
 
         bounds
     }
-
-    /// Renders the full price-allocation step curve, including orders.
+    // In your impl
     fn render_exposure_curve(&self, ui: &mut PlotUi) {
         let anchor_balance = *self.anchor;
-
-        // TODO: This causes a 1-frame lag for updating lines
         let y_range = ui.plot_bounds().range_y();
 
-        // 1. Prepare bids: sort from LOWEST price to HIGHEST
-        let bids: Vec<PricedOrder> = self
-            .orders
-            .bids
-            .iter()
-            .rev()
-            .map(|order| {
-                let price = -order.delta[1] / order.delta[0];
-                PricedOrder {
-                    delta: order.delta,
-                    log_price: price.log10(),
-                }
-            })
-            .collect();
+        // Draw the bids wing (from anchor down to the bottom edge)
+        // Assumes self.orders.bids are sorted from highest price to lowest.
+        let highest_bid_log_price = draw_exposure_wing(
+            ui,
+            &self.orders.bids,
+            anchor_balance,
+            *y_range.start(),
+            true, // is_bids = true
+        );
 
-        // 2. Calculate the total balance as if all bids were filled
-        let mut cumulative_balance = bids.iter().fold(anchor_balance, |acc, b| {
-            [acc[0] + b.delta[0], acc[1] + b.delta[1]]
-        });
+        // Draw the asks wing (from anchor up to the top edge)
+        // Assumes self.orders.asks are sorted from lowest price to highest.
+        let lowest_ask_log_price = draw_exposure_wing(
+            ui,
+            &self.orders.asks,
+            anchor_balance,
+            *y_range.end(),
+            false, // is_bids = false
+        );
 
-        // 3. Draw from the bottom of the plot upwards, "un-filling" orders
-        let mut highest_log_price = *y_range.start();
-        for bid in bids.iter() {
-            // Draw the sigmoid curve segment using the current (more extreme) balance
-            let points = PlotPoints::from_parametric_callback(
-                move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
-                highest_log_price..=bid.log_price,
-                // TODO: This should be based on the length in pixels
-                128,
-            );
-
-            // Draw the horizontal "fill" line for this order
-            let f_before_unfill = log_price_to_allocation(bid.log_price, cumulative_balance);
-            cumulative_balance[0] -= bid.delta[0];
-            cumulative_balance[1] -= bid.delta[1];
-
-            let f_after_unfill = log_price_to_allocation(bid.log_price, cumulative_balance);
-
-            if bid.log_price <= highest_log_price {
-                continue;
-            }
-
-            ui.line(Line::new("Bid Orders", points).color(BID_POINTS_COLOR));
-            ui.line(
-                Line::new(
-                    "Bid Orders",
-                    PlotPoints::new(vec![
-                        [f_before_unfill, bid.log_price],
-                        [f_after_unfill, bid.log_price],
-                    ]),
-                )
-                .color(BID_LINE_COLOR),
-            );
-
-            highest_log_price = bid.log_price;
-        }
-
-        // 1. Prepare asks: sort from HIGHEST price to LOWEST
-        let asks: Vec<PricedOrder> = self
-            .orders
-            .asks
-            .iter()
-            .rev()
-            .map(|order| {
-                let price = -order.delta[1] / order.delta[0];
-                PricedOrder {
-                    delta: order.delta,
-                    log_price: price.log10(),
-                }
-            })
-            .collect();
-
-        // 2. Calculate total balance if all asks were filled
-        let mut cumulative_balance = asks.iter().fold(anchor_balance, |acc, a| {
-            [acc[0] + a.delta[0], acc[1] + a.delta[1]]
-        });
-
-        // 3. Draw from the top down, "un-filling" orders
-        let mut lowest_log_price = *y_range.end();
-        for ask in asks.iter() {
-            // Draw the sigmoid curve segment above this order
-            let points = PlotPoints::from_parametric_callback(
-                move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
-                ask.log_price..=lowest_log_price,
-                128,
-            );
-
-            // Draw horizontal fill line
-            let f_before_unfill = log_price_to_allocation(ask.log_price, cumulative_balance);
-            cumulative_balance[0] -= ask.delta[0];
-            cumulative_balance[1] -= ask.delta[1];
-            let f_after_unfill = log_price_to_allocation(ask.log_price, cumulative_balance);
-
-            if lowest_log_price <= ask.log_price {
-                continue;
-            }
-
-            ui.line(Line::new("Ask Orders", points).color(ASK_POINTS_COLOR));
-            ui.line(
-                Line::new(
-                    "Ask Orders",
-                    PlotPoints::new(vec![
-                        [f_before_unfill, ask.log_price],
-                        [f_after_unfill, ask.log_price],
-                    ]),
-                )
-                .color(ASK_LINE_COLOR),
-            );
-
-            lowest_log_price = ask.log_price;
-        }
-
-        if lowest_log_price <= highest_log_price {
+        // Ensure there's a valid gap between the best bid and ask before drawing the anchor
+        if lowest_ask_log_price <= highest_bid_log_price {
             return;
         }
 
-        // `last_log_price` is now the price of the lowest ask, the top of the anchor curve range.
-        // --- ANCHOR (Center) ---
-        // The range for the anchor curve is now perfectly defined by the loops above.
+        // Draw the central anchor curve in the space between the best bid and ask
         let points = PlotPoints::from_parametric_callback(
             move |log_p| (log_price_to_allocation(log_p, anchor_balance), log_p),
-            highest_log_price..=lowest_log_price,
+            highest_bid_log_price..=lowest_ask_log_price,
             256,
         );
         ui.line(Line::new("Anchor", points).color(ANCHOR_COLOR));
