@@ -5,7 +5,7 @@ use std::f64::consts::LN_10;
 use chrono::{DateTime, Utc};
 use egui::{CentralPanel, Color32, Panel, Rangef};
 use egui_plot::{
-    AxisHints, GridInput, GridMark, HLine, Line, Plot, PlotBounds, PlotPoint, PlotPoints,
+    AxisHints, GridInput, GridMark, HLine, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints,
     PlotResponse, PlotUi, Points, VLine,
 };
 
@@ -14,7 +14,7 @@ use super::{
     backend::models::{Order, Trade, TradeType},
 };
 use crate::utils::{format_human_num, log_ln_grid_spacer};
-use price_allocation::price_to_allocation;
+use price_allocation::log_price_to_allocation;
 
 // Define colors as constants for clarity and easy modification.
 const AXIS_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(250, 238, 214, 230);
@@ -95,6 +95,13 @@ impl OrderFrontier {
     }
 }
 
+/// A helper struct to hold an order and its calculated price.
+#[derive(Clone, Copy, Debug)]
+struct PricedOrder {
+    delta: [f64; 2],
+    log_price: f64,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct PlotContext<'f> {
     pub mode: AppMode,
@@ -169,6 +176,126 @@ impl PlotContext<'_> {
         }
 
         bounds
+    }
+
+    /// Renders the full price-allocation step curve, including orders.
+    fn render_exposure_curve(&self, ui: &mut PlotUi) {
+        let [x, y] = *self.anchor;
+        let anchor_balance = (x, y);
+
+        // 1. Prepare and sort the orders
+        let mut bids: Vec<PricedOrder> = self
+            .orders
+            .bids
+            .iter()
+            .map(|order| {
+                let price = -order.delta[1] / order.delta[0];
+                PricedOrder {
+                    delta: order.delta,
+                    log_price: price.log10(),
+                }
+            })
+            .collect();
+
+        // Bids are sorted high-to-low price
+        bids.sort_by(|a, b| b.log_price.partial_cmp(&a.log_price).unwrap());
+
+        let mut asks: Vec<PricedOrder> = self
+            .orders
+            .asks
+            .iter()
+            .map(|order| {
+                let price = -order.delta[1] / order.delta[0];
+                PricedOrder {
+                    delta: order.delta,
+                    log_price: price.log10(),
+                }
+            })
+            .collect();
+        // Asks are sorted low-to-high price
+        asks.sort_by(|a, b| a.log_price.partial_cmp(&b.log_price).unwrap());
+
+        let y_range = ui.plot_bounds().range_y();
+        let highest_bid_log_price = bids.first().map_or(y_range.start(), |o| &o.log_price);
+        let lowest_ask_log_price = asks.first().map_or(y_range.end(), |o| &o.log_price);
+
+        // 2. Draw the central "anchor" curve between the best bid and ask
+        let points = PlotPoints::from_parametric_callback(
+            move |log_p| (log_price_to_allocation(log_p, anchor_balance), log_p),
+            highest_bid_log_price..=lowest_ask_log_price,
+            512,
+        );
+        ui.line(Line::new("Anchor", points).color(ANCHOR_COLOR));
+
+        // 3. Draw the bids side (moving down in price)
+        let mut cumulative_balance = anchor_balance;
+        let mut last_log_price = highest_bid_log_price;
+
+        for (i, bid) in bids.iter().enumerate() {
+            // Draw the horizontal line for this order
+            let f_start = log_price_to_allocation(bid.log_price, cumulative_balance);
+            let balance_after = (
+                cumulative_balance.0 + bid.delta[0],
+                cumulative_balance.1 + bid.delta[1],
+            );
+            let f_end = log_price_to_allocation(bid.log_price, balance_after);
+            ui.line(
+                Line::new(
+                    "Bid Fill",
+                    PlotPoints::new(vec![[f_start, bid.log_price], [f_end, bid.log_price]]),
+                )
+                .color(BID_POINTS_COLOR),
+            );
+
+            // Update balance for the next segment
+            cumulative_balance = balance_after;
+
+            // Draw the sigmoid segment connecting to the *next* bid
+            let next_log_price = bids.get(i + 1).map_or(y_range.start(), |o| &o.log_price);
+            let points = PlotPoints::from_parametric_callback(
+                move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
+                next_log_price..=last_log_price,
+                256,
+            );
+            ui.line(Line::new("Bid Curve", points).color(BID_LINE_COLOR));
+
+            last_log_price = &bid.log_price;
+        }
+
+        // 4. Draw the asks side (moving up in price)
+        cumulative_balance = anchor_balance;
+        last_log_price = lowest_ask_log_price;
+
+        for (i, ask) in asks.iter().enumerate() {
+            // Draw the horizontal line
+            let f_start = log_price_to_allocation(ask.log_price, cumulative_balance);
+            let balance_after = (
+                cumulative_balance.0 + ask.delta[0],
+                cumulative_balance.1 + ask.delta[1],
+            );
+            let f_end = log_price_to_allocation(ask.log_price, balance_after);
+            ui.line(
+                Line::new(
+                    "Ask Fill",
+                    PlotPoints::new(vec![[f_start, ask.log_price], [f_end, ask.log_price]]),
+                )
+                .color(ASK_POINTS_COLOR),
+            );
+
+            // Update balance
+            cumulative_balance = balance_after;
+
+            // Draw the sigmoid segment connecting to the *next* ask
+            let next_log_price = asks.get(i + 1).map_or(y_range.end(), |o| &o.log_price);
+            let points = PlotPoints::from_parametric_callback(
+                move |log_p| (log_price_to_allocation(log_p, cumulative_balance), log_p),
+                last_log_price..=next_log_price,
+                256,
+            );
+            ui.line(Line::new("Ask Curve", points).color(ASK_LINE_COLOR));
+
+            last_log_price = &ask.log_price;
+        }
     }
 }
 
@@ -246,6 +373,7 @@ impl ChartState {
     ) -> PlotResponse<PlotPanelResponse> {
         Panel::right("price_allocation").show_inside(ui, |ui| {
             Plot::new("price allocation plot")
+                .legend(Legend::default())
                 .custom_y_axes(vec![AxisHints::new_y().min_thickness(48.0)])
                 .default_x_bounds(0.0, 1.0000001)
                 .allow_zoom([false, true])
@@ -256,22 +384,7 @@ impl ChartState {
                 // .x_grid_spacer(egui_plot::uniform_grid_spacer([10.0, 5.0, 2.0]))
                 .y_grid_spacer(grid_marks(true, true))
                 .y_axis_formatter(|m, _| axis_formatter(true, m))
-                .show(ui, |ui| {
-                    let [x, y] = *ctx.anchor;
-
-                    let points = PlotPoints::from_parametric_callback(
-                        move |ln_p| (price_to_allocation(ln_p, (x, y)), ln_p),
-                        ui.plot_bounds().range_y(),
-                        1024,
-                    );
-
-                    let line = Line::new("Anchor", points)
-                        // .width(2.6)
-                        .style(egui_plot::LineStyle::Solid)
-                        .color(ANCHOR_COLOR);
-
-                    ui.line(line);
-                })
+                .show(ui, |ui| ctx.render_exposure_curve(ui));
         });
 
         let positive_only_grid = self.positive_only_grid;
