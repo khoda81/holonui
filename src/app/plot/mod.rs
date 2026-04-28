@@ -99,6 +99,15 @@ impl OrderFrontier {
             asks: asks.into_iter().map(Into::into).collect(),
         }
     }
+
+    pub fn apply_fee(&mut self, fee_rate: f64) {
+        for order in self.bids.iter_mut() {
+            order.delta[0] *= 1.0 - fee_rate;
+        }
+        for order in self.asks.iter_mut() {
+            order.delta[1] *= 1.0 - fee_rate;
+        }
+    }
 }
 
 /// Draws one "wing" (either bids or asks) of the exposure curve in a single pass.
@@ -362,6 +371,7 @@ impl ChartState {
         ctx: PlotContext<'_>,
     ) -> PlotResponse<PlotPanelResponse> {
         Panel::right("price_allocation").show_inside(ui, |ui| {
+            // TODO: We should align the bottom of this with the other chart
             Plot::new("price allocation plot")
                 .legend(
                     Legend::default()
@@ -369,6 +379,7 @@ impl ChartState {
                 )
                 .custom_y_axes(vec![AxisHints::new_y().min_thickness(48.0)])
                 .default_x_bounds(0.0, 1.0000001)
+                .default_y_bounds(6.15, 6.3)
                 .allow_zoom([false, true])
                 .allow_scroll([false, true])
                 .allow_drag([false, true])

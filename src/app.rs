@@ -93,6 +93,8 @@ impl HolonApp {
             match event {
                 BackendEvent::Orders(orders) => {
                     self.orders = orders;
+                    // TODO: The fee should be received from the api or the user, not hardcoded
+                    self.orders.apply_fee(0.125e-2);
                     self.chart.update_bounds();
                 }
 
