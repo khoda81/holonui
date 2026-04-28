@@ -9,15 +9,12 @@ use egui_plot::{
     PlotResponse, Points, VLine,
 };
 
-use crate::{
-    app::plot::price_allocation::generate_price_allocation_line,
-    utils::{format_human_num, log_ln_grid_spacer},
-};
-
 use super::{
     AppMode,
     backend::models::{Order, Trade, TradeType},
 };
+use crate::utils::{format_human_num, log_ln_grid_spacer};
+use price_allocation::{allocation_to_price, price_to_allocation};
 
 pub type Allocation = [f64; 2];
 
@@ -254,13 +251,13 @@ impl ChartState {
                 .show(ui, |ui| {
                     let [x, y] = *ctx.anchor;
                     let points = PlotPoints::from_explicit_callback(
-                        move |f| generate_price_allocation_line(f, (x, y)) / -LN_10,
+                        move |f| allocation_to_price(f, (x, y)),
                         0.0..1.0,
                         1024,
                     );
 
                     let line = Line::new("Anchor", points)
-                        .width(2.6)
+                        // .width(2.6)
                         .style(egui_plot::LineStyle::Solid)
                         .color(Self::ANCHOR_COLOR);
 
