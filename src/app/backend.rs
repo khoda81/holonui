@@ -140,12 +140,11 @@ impl RequestContext {
         query.insert("dstCurrency", Y.to_string());
 
         let mut trajectory = Vec::new();
-        for page in 1.. {
+        for page in 1..3 {
             query.insert("page", page.to_string());
             let page: TradesPage = self.fetch_endpoint("market/trades/list", &query).await;
 
             trajectory.extend(page.trades.into_iter().map(Into::into));
-
             self.send_event(BackendEvent::Trades(trajectory.clone()))
                 .await;
 
