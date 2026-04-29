@@ -140,6 +140,7 @@ impl RequestContext {
         query.insert("dstCurrency", Y.to_string());
 
         let mut trajectory = Vec::new();
+        // TODO: Limit pagination based on time
         for page in 1..3 {
             query.insert("page", page.to_string());
             let page: TradesPage = self.fetch_endpoint("market/trades/list", &query).await;
