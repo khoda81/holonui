@@ -192,7 +192,7 @@ impl RequestContext {
             .fetch_endpoint("users/wallets/list", &[] as &[(&str, &str)])
             .await;
 
-        let mut current_usdt = 240.29;
+        let mut current_usdt = 0.0;
         let mut current_rls = 0.0;
 
         for wallet in response.wallets {

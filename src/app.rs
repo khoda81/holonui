@@ -12,6 +12,7 @@ use tokio::sync::mpsc::{self as tmpsc, error::TrySendError};
 const X: &str = "usdt";
 const Y: &str = "rls";
 
+// TODO: We should use the price-allocation plot to place orders
 #[derive(Clone, Copy, Debug, Default)]
 enum AppMode {
     #[default]
@@ -101,6 +102,7 @@ impl HolonApp {
                 BackendEvent::Trades(trajectory) => self.trajectory = trajectory,
                 BackendEvent::Balances(anchor) => {
                     self.anchor = anchor;
+                    self.anchor[0] += 243.65;
                     self.chart.update_bounds();
                 }
 
@@ -146,6 +148,7 @@ impl HolonApp {
                 context.trajectory = &self.trajectory;
             }
             if self.show_order_frontier {
+                // TODO: This should not effect the price-allocation plot
                 context.orders = &self.orders;
             }
 
