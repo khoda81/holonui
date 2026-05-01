@@ -52,7 +52,6 @@ impl From<Trade> for TradeSegment {
 #[derive(Clone, Debug)]
 pub struct OrderSegment {
     delta: [f64; 2],
-    created_at: DateTime<Utc>,
 }
 
 impl OrderSegment {
@@ -71,10 +70,7 @@ impl From<Order> for OrderSegment {
             TradeType::Sell => [-value.unmatched_amount, total],
         };
 
-        Self {
-            delta,
-            created_at: value.created_at,
-        }
+        Self { delta }
     }
 }
 
@@ -475,8 +471,8 @@ impl ChartState {
     /// Draws the X and Y axes if not in log scale.
     fn draw_origin_axes(&self, ui: &mut PlotUi) {
         if !self.log_grid_spacing {
-            ui.hline(HLine::new("Y = 0", 0.0).color(AXIS_COLOR).width(2.2));
-            ui.vline(VLine::new("X = 0", 0.0).color(AXIS_COLOR).width(2.2));
+            ui.hline(HLine::new("Y = 0", 0.0).color(AXIS_COLOR).width(2.2_f32));
+            ui.vline(VLine::new("X = 0", 0.0).color(AXIS_COLOR).width(2.2_f32));
         }
     }
 
@@ -514,7 +510,7 @@ impl ChartState {
 
             let line = Line::new("Trajectory", PlotPoints::new(points))
                 .color(color)
-                .width(2.0);
+                .width(2.0_f32);
 
             ui.line(line);
 
@@ -549,7 +545,7 @@ impl ChartState {
 
             let line = Line::new(name, PlotPoints::new(line_points))
                 .color(line_color)
-                .width(2.6);
+                .width(2.6_f32);
 
             ui.line(line);
 
@@ -558,7 +554,7 @@ impl ChartState {
         }
 
         self.transform_points(&mut nodes);
-        let points = Points::new(name, nodes).radius(3.2).color(points_color);
+        let points = Points::new(name, nodes).radius(3.2_f32).color(points_color);
         ui.points(points);
     }
 
@@ -568,7 +564,7 @@ impl ChartState {
         self.transform_points(&mut anchor_node);
         ui.points(
             Points::new("Anchor (Current Balance)", anchor_node)
-                .radius(6.5)
+                .radius(6.5_f32)
                 .color(ANCHOR_COLOR),
         );
     }
@@ -590,7 +586,7 @@ impl ChartState {
 
             let ghost_line = Line::new("Order", ghost_points)
                 .color(Color32::from_rgba_unmultiplied(240, 240, 255, 170))
-                .width(1.8)
+                .width(1.8_f32)
                 .style(egui_plot::LineStyle::Dashed { length: 5.0 });
 
             ui.line(ghost_line);

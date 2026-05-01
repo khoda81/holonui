@@ -1,16 +1,13 @@
 mod backend;
 mod plot;
 
-use crate::utils::format_humantime;
-use backend::{BackendCommand, BackendEvent, start_backend};
+use crate::utils::{format_humantime, load_external_exposures};
+use backend::{BackendCommand, BackendEvent, Market, start_backend};
 use chrono::Utc;
 use egui::Frame;
 use plot::ChartState;
+use std::collections::HashMap;
 use tokio::sync::mpsc::{self as tmpsc, error::TrySendError};
-
-// TODO: These should be runtime vars
-const X: &str = "usdt";
-const Y: &str = "rls";
 
 // TODO: We should use the price-allocation plot to place orders
 #[derive(Clone, Copy, Debug, Default)]
@@ -32,6 +29,13 @@ pub struct HolonApp {
     trajectory: plot::Trajectory,
     anchor: plot::Allocation,
 
+    /// The trading pair shown on the plot and queried from the API.
+    market: Market,
+
+    /// Off-exchange balances per currency, loaded from `exposures.yaml`.
+    /// Added to API-reported balances to form the plot anchor.
+    external_exposures: HashMap<String, f64>,
+
     show_trajectory: bool,
     show_order_frontier: bool,
 
@@ -48,6 +52,7 @@ impl HolonApp {
         let (event_tx, event_rx) = tmpsc::channel(COMMAND_BUFFER_SIZE);
 
         let ctx = cc.egui_ctx.clone();
+        let market = Market::default();
         // Spawn ONE dedicated OS thread for the entire networking backend
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
@@ -57,13 +62,13 @@ impl HolonApp {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(start_backend(ctx, cmd_rx, event_tx));
+                .block_on(start_backend(ctx, market, cmd_rx, event_tx));
         });
 
         // In WASM, we just toss the entire background loop onto the JS event loop.
         // It will yield execution at every `.await`, so it won't freeze the UI.
         #[cfg(target_arch = "wasm32")]
-        wasm_bindgen_futures::spawn_local(start_backend(ctx, cmd_rx, event_tx));
+        wasm_bindgen_futures::spawn_local(start_backend(ctx, market, cmd_rx, event_tx));
 
         if let Err(err) = cmd_tx.send(BackendCommand::FetchAll) {
             log::error!("Failed to send fetch all command to network backend: {err}")
@@ -76,6 +81,9 @@ impl HolonApp {
             orders: plot::OrderFrontier::default(),
             trajectory: Vec::new(),
             anchor: [0.0, 0.0],
+
+            market: Market::default(),
+            external_exposures: load_external_exposures(),
 
             show_trajectory: true,
             show_order_frontier: true,
@@ -102,7 +110,21 @@ impl HolonApp {
                 BackendEvent::Trades(trajectory) => self.trajectory = trajectory,
                 BackendEvent::Balances(anchor) => {
                     self.anchor = anchor;
-                    self.anchor[0] += 243.65;
+                    log::debug!("Nobitex: {:?}", self.anchor);
+                    log::debug!("External: {:?}", self.external_exposures);
+
+                    let src_offset = self
+                        .external_exposures
+                        .get(&self.market.src)
+                        .copied()
+                        .unwrap_or(0.0);
+                    let dst_offset = self
+                        .external_exposures
+                        .get(&self.market.dst)
+                        .copied()
+                        .unwrap_or(0.0);
+                    self.anchor[0] += src_offset;
+                    self.anchor[1] += dst_offset;
                     self.chart.update_bounds();
                 }
 
@@ -143,7 +165,12 @@ impl HolonApp {
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             let now = Utc::now();
-            let mut context = plot::PlotContext::new(self.mode, now, &self.anchor, (X, Y));
+            let mut context = plot::PlotContext::new(
+                self.mode,
+                now,
+                &self.anchor,
+                (&self.market.src, &self.market.dst),
+            );
             if self.show_trajectory {
                 context.trajectory = &self.trajectory;
             }

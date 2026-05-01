@@ -1,5 +1,6 @@
 use core::f64;
 use egui_plot::{GridInput, GridMark};
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -134,6 +135,45 @@ pub fn log_ln_grid_spacer(input: GridInput, ln_base: f64) -> Vec<GridMark> {
     marks.dedup_by_key(|m| m.value);
 
     marks
+}
+
+/// External balances not reported by the Nobitex API, loaded at runtime from
+/// `exposures.yaml`. Keyed by currency code, then by source name. The values
+/// are summed per currency to form the plot anchor offset.
+///
+/// On native targets the file is read from disk next to the executable. On WASM
+/// there is no synchronous filesystem access, so an empty map is returned and a
+/// warning is logged.
+pub fn load_external_exposures() -> HashMap<String, f64> {
+    #[derive(serde::Deserialize)]
+    struct Exposures(HashMap<String, HashMap<String, f64>>);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let yaml = match std::fs::read_to_string("exposures.yaml") {
+        Ok(contents) => contents,
+        Err(err) => {
+            log::warn!("Could not read exposures.yaml: {err}");
+            return HashMap::new();
+        }
+    };
+
+    #[cfg(target_arch = "wasm32")]
+    let yaml = {
+        log::warn!("exposures.yaml is not available on WASM");
+        return HashMap::new();
+    };
+
+    match serde_yml::from_str::<Exposures>(&yaml) {
+        Ok(parsed) => parsed
+            .0
+            .into_iter()
+            .map(|(currency, sources)| (currency, sources.into_values().sum()))
+            .collect(),
+        Err(err) => {
+            log::error!("Failed to parse exposures.yaml: {err}");
+            HashMap::new()
+        }
+    }
 }
 
 pub fn get_api_key() -> Option<String> {

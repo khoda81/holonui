@@ -1,9 +1,6 @@
 pub mod models;
 
-use super::{
-    X, Y,
-    plot::{Allocation, OrderFrontier, Trajectory},
-};
+use super::plot::{Allocation, OrderFrontier, Trajectory};
 use crate::utils::{get_api_key, sleep_async, spawn_task};
 use models::{ApiFailure, ApiResponse, OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
@@ -16,6 +13,24 @@ use tokio_util::sync::CancellationToken;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
+
+/// The trading pair shown by the app and queried from the API.
+/// `src` is the source currency (plot X axis), `dst` is the destination
+/// currency (plot Y axis).
+#[derive(Clone, Debug)]
+pub struct Market {
+    pub src: String,
+    pub dst: String,
+}
+
+impl Default for Market {
+    fn default() -> Self {
+        Self {
+            src: "usdt".into(),
+            dst: "rls".into(),
+        }
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum FetchError {
@@ -66,6 +81,7 @@ struct BackendState {
     api_key: RwLock<String>,
     client: reqwest::Client,
     base_url: reqwest::Url,
+    market: Market,
 }
 
 /// A handle that is cloned and given to each spawned task.
@@ -86,6 +102,7 @@ async fn cancelable<F: Future>(f: F, cancel_token: CancellationToken) {
 
 pub async fn start_backend(
     ctx: egui::Context,
+    market: Market,
     mut commands: tmpsc::UnboundedReceiver<BackendCommand>,
     events: tmpsc::Sender<BackendEvent>,
 ) {
@@ -93,6 +110,7 @@ pub async fn start_backend(
         api_key: RwLock::new(get_api_key().unwrap_or_default()),
         client: reqwest::Client::new(),
         base_url: reqwest::Url::parse(BASE_URL).unwrap(),
+        market,
     });
 
     let mut cancel_token = CancellationToken::new();
@@ -135,13 +153,14 @@ pub async fn start_backend(
 
 impl RequestContext {
     async fn fetch_trajectory(self) {
+        let market = &self.state.market;
         let mut query = HashMap::new();
-        query.insert("srcCurrency", X.to_string());
-        query.insert("dstCurrency", Y.to_string());
+        query.insert("srcCurrency", market.src.clone());
+        query.insert("dstCurrency", market.dst.clone());
 
         let mut trajectory = Vec::new();
         // TODO: Limit pagination based on time
-        for page in 1..3 {
+        for page in 1..5 {
             query.insert("page", page.to_string());
             let page: TradesPage = self.fetch_endpoint("market/trades/list", &query).await;
 
@@ -156,12 +175,13 @@ impl RequestContext {
     }
 
     async fn fetch_orders(self) {
+        let market = &self.state.market;
         let mut bids = Vec::new();
         let mut asks = Vec::new();
         let mut query = HashMap::new();
 
-        query.insert("srcCurrency", X.to_string());
-        query.insert("dstCurrency", Y.to_string());
+        query.insert("srcCurrency", market.src.clone());
+        query.insert("dstCurrency", market.dst.clone());
         query.insert("details", "2".to_string());
 
         for page in 1.. {
@@ -183,27 +203,31 @@ impl RequestContext {
         bids.sort_by(|a, b| b.price.total_cmp(&a.price)); // descending
         asks.sort_by(|a, b| a.price.total_cmp(&b.price)); // ascending
 
+        log::trace!("bids: {:#?}", bids);
+        log::trace!("asks: {:#?}", asks);
+
         self.send_event(BackendEvent::Orders(OrderFrontier::from_sides(bids, asks)))
             .await
     }
 
     async fn fetch_balances(self) {
+        let market = &self.state.market;
         let response: WalletsResponse = self
             .fetch_endpoint("users/wallets/list", &[] as &[(&str, &str)])
             .await;
 
-        let mut current_usdt = 0.0;
-        let mut current_rls = 0.0;
+        let mut current_src = 0.0;
+        let mut current_dst = 0.0;
 
         for wallet in response.wallets {
-            if wallet.currency == X {
-                current_usdt += wallet.balance;
-            } else if wallet.currency == Y {
-                current_rls += wallet.balance;
+            if wallet.currency == market.src {
+                current_src += wallet.balance;
+            } else if wallet.currency == market.dst {
+                current_dst += wallet.balance;
             }
         }
 
-        self.send_event(BackendEvent::Balances([current_usdt, current_rls]))
+        self.send_event(BackendEvent::Balances([current_src, current_dst]))
             .await;
     }
 

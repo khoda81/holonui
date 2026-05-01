@@ -97,6 +97,4 @@ pub struct Order {
     pub price: f64,
     #[serde(rename = "unmatchedAmount", deserialize_with = "f64_from_str")]
     pub unmatched_amount: f64,
-    #[serde(rename = "created_at")]
-    pub created_at: DateTime<Utc>,
 }
