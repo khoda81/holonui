@@ -2,12 +2,16 @@ mod backend;
 mod plot;
 
 use crate::utils::{format_humantime, load_external_exposures};
+#[cfg(not(target_arch = "wasm32"))]
+use backend::{ApiCredentials, save_api_credentials};
 use backend::{BackendCommand, BackendEvent, Market, start_backend};
 use chrono::Utc;
 use egui::Frame;
 use plot::ChartState;
 use std::collections::HashMap;
-use tokio::sync::mpsc::{self as tmpsc, error::TrySendError};
+use tokio::sync::mpsc as tmpsc;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::sync::mpsc::error::TrySendError;
 
 // TODO: We should use the price-allocation plot to place orders
 #[derive(Clone, Copy, Debug, Default)]
@@ -41,7 +45,9 @@ pub struct HolonApp {
 
     show_api_key_dialog: bool,
     #[cfg(not(target_arch = "wasm32"))]
-    api_key_input: String,
+    api_public_key_input: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    api_private_key_input: String,
 }
 
 impl HolonApp {
@@ -90,7 +96,9 @@ impl HolonApp {
 
             show_api_key_dialog: false,
             #[cfg(not(target_arch = "wasm32"))]
-            api_key_input: String::new(),
+            api_public_key_input: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            api_private_key_input: String::new(),
 
             backend_events: event_rx,
             backend_commands: cmd_tx,
@@ -216,39 +224,56 @@ impl HolonApp {
         ui.take_available_width();
     }
 
-    fn set_backend_token(&self, token: String) -> Result<(), TrySendError<BackendCommand>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_backend_credentials(
+        &self,
+        credentials: ApiCredentials,
+    ) -> Result<(), TrySendError<BackendCommand>> {
         self.backend_commands
-            .send(BackendCommand::UpdateApiKey(token))?;
+            .send(BackendCommand::UpdateApiCredentials(credentials))?;
 
         self.backend_commands.send(BackendCommand::FetchAll)?;
 
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn show_api_key_dialog(
         &mut self,
         ui: &mut egui::Ui,
     ) -> Option<egui::InnerResponse<Option<()>>> {
-        fn save_api_key(key: &str) -> Result<(), keyring::Error> {
-            keyring::Entry::new("holonui", "default-user")?.set_password(key)
-        }
-
-        egui::Window::new("API Key")
+        egui::Window::new("Nobitex API Key")
             .collapsible(false)
             .resizable(false)
             .show(ui.ctx(), |ui| {
-                ui.label("Enter your Nobitex API token:");
-                ui.text_edit_singleline(&mut self.api_key_input);
+                ui.label("Use a specialized Nobitex API key with READ permission.");
+                ui.label("Public key:");
+                ui.text_edit_singleline(&mut self.api_public_key_input);
+                ui.label("Private key:");
+                ui.add(egui::TextEdit::singleline(&mut self.api_private_key_input).password(true));
 
                 if ui.button("Save").clicked() {
-                    if let Err(err) = save_api_key(&self.api_key_input) {
-                        log::error!("Failed to save api_key: {err}")
+                    let credentials = ApiCredentials::new(
+                        self.api_public_key_input.clone(),
+                        self.api_private_key_input.clone(),
+                    );
+
+                    if let Err(err) = credentials.validate() {
+                        log::error!("Invalid Nobitex API key: {err}");
+                        return;
                     }
 
-                    if let Err(err) = self.set_backend_token(self.api_key_input.clone()) {
-                        log::error!("Failed to send update api key command to backend: {err}")
+                    if let Err(err) = save_api_credentials(&credentials) {
+                        log::error!("Failed to save Nobitex API key: {err}");
+                        return;
                     }
 
+                    if let Err(err) = self.set_backend_credentials(credentials) {
+                        log::error!("Failed to update backend API key: {err}");
+                        return;
+                    }
+
+                    self.api_private_key_input.clear();
                     self.show_api_key_dialog = false;
                 }
             })

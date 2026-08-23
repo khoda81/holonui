@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 async-stream = "0.3"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+ed25519-dalek = "2.2"
 eframe = "0.34"
 egui = "0.34"
 egui_plot = "0.35"

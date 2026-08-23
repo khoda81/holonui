@@ -1,7 +1,9 @@
+mod auth;
 pub mod models;
 
 use super::plot::{Allocation, OrderFrontier, Trajectory};
-use crate::utils::{get_api_key, sleep_async, spawn_task};
+use crate::utils::{sleep_async, spawn_task};
+use auth::load_api_credentials;
 use models::{ApiFailure, ApiResponse, OrderPage, TradesPage, WalletsResponse};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
@@ -10,6 +12,10 @@ use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use tokio::sync::{RwLock, mpsc as tmpsc};
 use tokio_util::sync::CancellationToken;
+
+pub(super) use auth::ApiCredentials;
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) use auth::save_api_credentials;
 
 const BASE_URL: &str = "https://apiv2.nobitex.ir";
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -65,7 +71,7 @@ pub enum BackendCommand {
     FetchAll,
     CancelAll,
     #[cfg(not(target_arch = "wasm32"))]
-    UpdateApiKey(String),
+    UpdateApiCredentials(ApiCredentials),
 }
 
 pub enum BackendEvent {
@@ -78,7 +84,7 @@ pub enum BackendEvent {
 /// State that is shared across all tasks and the main backend loop.
 /// Arc lets us share ownership, and RwLock provides safe interior mutability.
 struct BackendState {
-    api_key: RwLock<String>,
+    api_credentials: RwLock<ApiCredentials>,
     client: reqwest::Client,
     base_url: reqwest::Url,
     market: Market,
@@ -107,7 +113,7 @@ pub async fn start_backend(
     events: tmpsc::Sender<BackendEvent>,
 ) {
     let state = Arc::new(BackendState {
-        api_key: RwLock::new(get_api_key().unwrap_or_default()),
+        api_credentials: RwLock::new(load_api_credentials()),
         client: reqwest::Client::new(),
         base_url: reqwest::Url::parse(BASE_URL).unwrap(),
         market,
@@ -135,12 +141,12 @@ pub async fn start_backend(
             }
 
             #[cfg(not(target_arch = "wasm32"))]
-            BackendCommand::UpdateApiKey(new_token) => {
+            BackendCommand::UpdateApiCredentials(new_credentials) => {
                 cancel_token.cancel(); // Kills all pending spawns
                 cancel_token = CancellationToken::new(); // Reset
 
-                let mut token_ref = context.state.api_key.write().await;
-                *token_ref = new_token;
+                let mut credentials = context.state.api_credentials.write().await;
+                *credentials = new_credentials;
             }
 
             BackendCommand::CancelAll => {
@@ -245,10 +251,22 @@ impl RequestContext {
         loop {
             log::trace!("Sending request for: {url}");
 
-            let request = self.state.client.get(url.clone()).query(query).header(
-                "Authorization",
-                format!("Token {}", self.state.api_key.read().await),
-            );
+            let mut request = match self.state.client.get(url.clone()).query(query).build() {
+                Ok(request) => request,
+                Err(err) => {
+                    log::error!("Failed to build request for `{}`: {err}", url.path());
+                    sleep_async(DEFAULT_RETRY_DELAY).await;
+                    continue;
+                }
+            };
+
+            let credentials = self.state.api_credentials.read().await.clone();
+            if let Err(err) = credentials.authenticate(&mut request) {
+                log::error!("Failed to authenticate request for `{}`: {err}", url.path());
+                self.send_event(BackendEvent::NeedApiKey).await;
+                sleep_async(DEFAULT_RETRY_DELAY).await;
+                continue;
+            }
 
             let err = match self.send_request(request).await {
                 Ok(res) => {
@@ -286,12 +304,17 @@ impl RequestContext {
         }
     }
 
-    async fn send_request<T>(&self, request: reqwest::RequestBuilder) -> Result<T, FetchError>
+    async fn send_request<T>(&self, request: reqwest::Request) -> Result<T, FetchError>
     where
         T: DeserializeOwned,
     {
         // TODO: We should probably have some mutex/semaphore to limit concurrent connections
-        let resp = request.send().await.map_err(FetchError::Request)?;
+        let resp = self
+            .state
+            .client
+            .execute(request)
+            .await
+            .map_err(FetchError::Request)?;
 
         let status = resp.status();
         let raw_text = resp.text().await.map_err(FetchError::Read)?;

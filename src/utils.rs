@@ -175,18 +175,3 @@ pub fn load_external_exposures() -> HashMap<String, f64> {
         }
     }
 }
-
-pub fn get_api_key() -> Option<String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    return {
-        log::debug!("Loading key from keyring");
-        keyring::Entry::new("holonui", "default-user")
-            .ok()?
-            .get_password()
-    }
-    .or_else(|_| std::env::var("NOBITEX_API_KEY"))
-    .ok();
-
-    #[cfg(target_arch = "wasm32")]
-    return std::env::var("NOBITEX_API_KEY").ok();
-}
